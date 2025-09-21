@@ -76,3 +76,7 @@ volumes:
   minio_data:
   static_volume:
   media_volume:
+
+networks:
+  lct:
+      driver: bridge
