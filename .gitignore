@@ -137,3 +137,5 @@ staticfiles/
 # Local configuration (часто используется для настроек, специфичных для разработчика)
 config/local.py
 .local.env
+
+.env
