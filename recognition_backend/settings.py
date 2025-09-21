@@ -7,11 +7,14 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Безопасность
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev")
 DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "*").split(",")
 
+# Приложения
 INSTALLED_APPS = [
+    # Системные
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -19,20 +22,24 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
-    
+    # DRF и токены
+    'rest_framework',
     'rest_framework.authtoken',
 
-    'rest_framework',
-    # твои приложения
+    # Хранилище
+    'storages',
+
+    # Утилиты
+    'django_extensions',
+
+    # Твои приложения
     'authapi',
-    "storages",
-    'django_extensions', 
 ]
 
-
+# URL конфигурация
 ROOT_URLCONF = 'recognition_backend.urls'
 
-# Postgres
+# База данных (Postgres)
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -45,29 +52,24 @@ DATABASES = {
     }
 }
 
-# Статика/медиа — вариант 1: локальные тома (быстро и просто)
-STATIC_URL = "/static/"
-STATIC_ROOT = "/app/static"
-
-MEDIA_URL = "/media/"
-MEDIA_ROOT = "/app/media"
-
-APPEND_SLASH = True
-
+# Middleware
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    # CSRF оставляем для админки и HTML-форм, но API не будет его требовать
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+# Шаблоны (обязательно для админки)
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],  # сюда можно добавить свои папки с шаблонами, если нужно
-        'APP_DIRS': True,  # искать шаблоны внутри приложений
+        'DIRS': [],
+        'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
                 'django.template.context_processors.debug',
@@ -79,8 +81,33 @@ TEMPLATES = [
     },
 ]
 
+# WSGI
+WSGI_APPLICATION = 'recognition_backend.wsgi.application'
 
-# Вариант 2: S3/MinIO для медиа (и при желании для статики)
+# Валидаторы паролей
+AUTH_PASSWORD_VALIDATORS = [
+    {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
+]
+
+# Локаль и время
+LANGUAGE_CODE = 'en-us'
+TIME_ZONE = 'UTC'
+USE_I18N = True
+USE_TZ = True
+
+# Статика и медиа (по умолчанию — локальные тома)
+STATIC_URL = '/static/'
+STATIC_ROOT = '/app/static'
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = '/app/media'
+
+APPEND_SLASH = True
+
+# MinIO / S3 (включается через USE_S3_MEDIA=1 в .env)
 USE_S3_MEDIA = os.environ.get("USE_S3_MEDIA", "0") == "1"
 if USE_S3_MEDIA:
     DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
@@ -88,53 +115,21 @@ if USE_S3_MEDIA:
     AWS_S3_ENDPOINT_URL = os.environ.get("AWS_S3_ENDPOINT_URL")
     AWS_S3_REGION_NAME = os.environ.get("AWS_S3_REGION_NAME", "us-east-1")
     AWS_S3_SIGNATURE_VERSION = os.environ.get("AWS_S3_SIGNATURE_VERSION", "s3v4")
-    AWS_S3_ADDRESSING_STYLE = "path"  # для MinIO обычно path
+    AWS_S3_ADDRESSING_STYLE = "path"
     AWS_S3_FILE_OVERWRITE = False
     AWS_DEFAULT_ACL = None
-    AWS_QUERYSTRING_AUTH = False  # публичные ссылки, если нужно
+    AWS_QUERYSTRING_AUTH = False
 
-
-AUTH_PASSWORD_VALIDATORS = [
-    {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    },
-]
-
+# DRF — убираем SessionAuthentication, чтобы Postman не требовал CSRF
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.SessionAuthentication',
         'rest_framework.authentication.BasicAuthentication',
+        'rest_framework.authentication.TokenAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
+        'rest_framework.permissions.AllowAny',
     ],
 }
 
-
-LANGUAGE_CODE = 'en-us'
-
-TIME_ZONE = 'UTC'
-
-USE_I18N = True
-
-USE_TZ = True
-
-
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/4.2/howto/static-files/
-
-STATIC_URL = 'static/'
-
-# Default primary key field type
-# https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
-
+# Primary key
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
