@@ -6,3 +6,6 @@ psycopg2==2.9.10
 python-dotenv==1.1.1
 sqlparse==0.5.3
 tzdata==2025.2
+django-storages==1.14.4
+gunicorn==23.0.0
+django-extensions
