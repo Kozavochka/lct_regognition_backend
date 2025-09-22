@@ -22,9 +22,12 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
+    'djoser',
+
     # DRF и токены
     'rest_framework',
-    'rest_framework.authtoken',
+    'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
 
     # Хранилище
     'storages',
@@ -34,6 +37,7 @@ INSTALLED_APPS = [
 
     # Твои приложения
     'authapi',
+    'image_api'
 ]
 
 # URL конфигурация
@@ -125,6 +129,7 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.BasicAuthentication',
         'rest_framework.authentication.TokenAuthentication',
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.AllowAny',
@@ -133,3 +138,39 @@ REST_FRAMEWORK = {
 
 # Primary key
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# Настройки Djoser — теперь с JWT
+DJOSER = {
+    'LOGIN_FIELD': 'username',
+    'USER_CREATE_PASSWORD_RETYPE': True,
+    'SEND_ACTIVATION_EMAIL': False,
+    'SERIALIZERS': {},
+    'TOKEN_MODEL': None,  # Это отключает использование модели Token из DRF
+}
+
+# Настройки JWT — здесь задаётся TTL (время жизни токенов)
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),       # Время жизни access-токена
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),          # Время жизни refresh-токена
+    'ROTATE_REFRESH_TOKENS': True,                        # Обновлять refresh при использовании
+    'BLACKLIST_AFTER_ROTATION': True,                     # Добавлять старые refresh в чёрный список
+    'UPDATE_LAST_LOGIN': True,                            # Обновлять last_login пользователя
+
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'VERIFYING_KEY': None,
+    'AUDIENCE': None,
+    'ISSUER': None,
+
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+    'TOKEN_TYPE_CLAIM': 'token_type',
+
+    'JTI_CLAIM': 'jti',
+}
