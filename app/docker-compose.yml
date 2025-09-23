@@ -21,7 +21,8 @@ services:
       - minio
     ports:
     - "8000:8000"
-
+    networks:
+      - lct
     expose:
       - "8000"
     restart: unless-stopped
@@ -39,6 +40,8 @@ services:
       - static_volume:/var/www/static
       - media_volume:/var/www/media
     restart: unless-stopped
+    networks:
+      - lct
 
   postgres:
     image: postgres:16-alpine
@@ -53,6 +56,8 @@ services:
       interval: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - lct
 
   minio:
     image: minio/minio:latest
@@ -71,6 +76,8 @@ services:
       interval: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - lct
 
 volumes:
   pg_data:

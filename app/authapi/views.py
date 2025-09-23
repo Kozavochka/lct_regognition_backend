@@ -1,11 +1,13 @@
 from django.shortcuts import render
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import status, pagination, viewsets
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.authtoken.models import Token  # для токенов (опционально)
 from django.contrib.auth import login, logout
-from .serializers import UserRegistrationSerializer, UserLoginSerializer
+from .serializers import UserRegistrationSerializer, UserLoginSerializer, UserSerializer
+from django.contrib.auth.models import User
 
 
 class UserRegistrationView(APIView):
@@ -53,3 +55,15 @@ class UserLogoutView(APIView):
     def post(self, request):
         logout(request)
         return Response({"message": "Выход выполнен"}, status=status.HTTP_200_OK)
+
+
+class UserPagination(pagination.PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+class UserViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    pagination_class = UserPagination
+    # permission_classes = [IsAuthenticated]

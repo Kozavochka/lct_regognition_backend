@@ -1,13 +1,20 @@
 from django.urls import path, include
-from . import views
+from rest_framework.routers import DefaultRouter
+
+from .views import UserViewSet
+
+router = DefaultRouter()
+router.register(r'users', UserViewSet)
 
 urlpatterns = [
-    # path('register/', views.UserRegistrationView.as_view(), name='register'),
-    # path('login/', views.UserLoginView.as_view(), name='login'),
-    # path('logout/', views.UserLogoutView.as_view(), name='logout'),
     path('auth/', include('djoser.urls')),
     path('auth/', include('djoser.urls.jwt')),
+    path('', include(router.urls)),
 ]
+
+# GET    /api/users/           # Список всех пользователей (с пагинацией)
+# GET    /api/users/{id}/      # Детали конкретного пользователя
+# http://127.0.0.1:8000/api/users/?page=2&page_size=5
 
 # регистрация POST /auth/users/
 # {
