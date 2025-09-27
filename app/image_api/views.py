@@ -11,8 +11,13 @@ from django.core.files.base import ContentFile
 from botocore.exceptions import ClientError
 from .models import UploadedImage
 from .serializers import UploadedImageSerializer
-from ..recognition_backend.settings import AWS_S3_ENDPOINT_URL, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, \
-    AWS_S3_REGION_NAME
+from recognition_backend import settings
+
+AWS_S3_ENDPOINT_URL = settings.AWS_S3_ENDPOINT_URL
+AWS_ACCESS_KEY_ID = settings.AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY = settings.AWS_SECRET_ACCESS_KEY
+AWS_S3_REGION_NAME = settings.AWS_S3_REGION_NAME
+
 
 logger = logging.getLogger(__name__)
 
