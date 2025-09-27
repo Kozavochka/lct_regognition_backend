@@ -56,6 +56,12 @@ class UserLogoutView(APIView):
         logout(request)
         return Response({"message": "Выход выполнен"}, status=status.HTTP_200_OK)
 
+class CurrentUserView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        serializer = UserSerializer(request.user)
+        return Response(serializer.data)
 
 class UserPagination(pagination.PageNumberPagination):
     page_size = 10
