@@ -1,5 +1,6 @@
 import os
 import uuid
+import boto3
 import logging
 
 from rest_framework.permissions import IsAuthenticated
