@@ -1,6 +1,5 @@
 import os
 import uuid
-import boto3
 import logging
 
 from rest_framework.permissions import IsAuthenticated
@@ -8,11 +7,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.core.files.base import ContentFile
-from botocore.exceptions import ClientError
+
 from .models import UploadedImage
 from .serializers import UploadedImageSerializer
-from ..recognition_backend.settings import AWS_S3_ENDPOINT_URL, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, \
-    AWS_S3_REGION_NAME
+from .services.s3_service import S3Service
 
 logger = logging.getLogger(__name__)
 
@@ -26,16 +24,7 @@ class UploadImageView(APIView):
         if not files:
             return Response({"error": "No files uploaded"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Создаем S3 клиент напрямую
-        s3_client = boto3.client(
-            's3',
-            endpoint_url=AWS_S3_ENDPOINT_URL,
-            aws_access_key_id=AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-            region_name=AWS_S3_REGION_NAME,
-        )
-
-        bucket_name = os.getenv('AWS_STORAGE_BUCKET_NAME')
+        s3_service = S3Service()
 
         # Сначала валидируем все файлы
         validated_files = []
@@ -58,7 +47,8 @@ class UploadImageView(APIView):
                     'filename': filename,
                     'content': file_content,
                     'original_filename': file_obj.name,
-                    'index': i
+                    'index': i,
+                    'content_type': getattr(file_obj, 'content_type', 'application/octet-stream')
                 })
 
             except Exception as e:
@@ -77,53 +67,39 @@ class UploadImageView(APIView):
         upload_errors = []
 
         try:
-            for validated_file in validated_files:
+            # Загружаем файлы в S3
+            upload_results = s3_service.batch_upload(validated_files)
+
+            # Обрабатываем успешные загрузки
+            for success_file in upload_results['successful']:
                 try:
-                    logger.info(f"Uploading to S3: {validated_file['filename']}")
-
-                    # Загружаем файл в S3 напрямую
-                    s3_client.put_object(
-                        Bucket=bucket_name,
-                        Key=validated_file['filename'],
-                        Body=validated_file['content'],
-                        ContentType=getattr(files[validated_file['index']], 'content_type', 'application/octet-stream')
-                    )
-                    logger.info(f"Uploaded to S3 successfully: {validated_file['filename']}")
-
-                    # Генерируем URL файла
-                    endpoint_url = os.getenv('AWS_S3_ENDPOINT_URL').rstrip('/')
-                    file_url = f"{endpoint_url}/{bucket_name}/{validated_file['filename']}"
-
                     # Сохраняем в БД
                     uploaded = UploadedImage.objects.create(
-                        filename=validated_file['filename'],
-                        s3_url=file_url
+                        filename=success_file['filename'],
+                        original_filename=success_file['original_filename'],
+                        file_path=f"uploads/{success_file['filename']}",  # можно настроить как нужно
+                        s3_url=success_file['url'],
+                        user_id=request.user.id  # или request.user если используется foreign key
                     )
                     uploaded_images.append(uploaded)
-                    logger.info(f"Database record created: {validated_file['filename']}")
-
-                except Exception as e:
-                    logger.error(f"Upload error for {validated_file['filename']}: {str(e)}")
+                    logger.info(f"Database record created: {success_file['filename']}")
+                except Exception as db_error:
+                    logger.error(f"Database error for {success_file['filename']}: {str(db_error)}")
+                    # Если не удалось сохранить в БД, удаляем файл из S3
+                    s3_service.delete_file(success_file['filename'])
                     upload_errors.append({
-                        "file_index": validated_file['index'],
-                        "filename": validated_file['original_filename'],
-                        "error": str(e)
+                        "file_index": success_file['index'],
+                        "filename": success_file['original_filename'],
+                        "error": f"Database error: {str(db_error)}"
                     })
 
-                    # Откатываем уже загруженные файлы
-                    for uploaded_image in uploaded_images:
-                        try:
-                            uploaded_image.delete()
-                            s3_client.delete_object(
-                                Bucket=bucket_name,
-                                Key=uploaded_image.filename
-                            )
-                        except Exception as delete_error:
-                            logger.error(f"Error deleting {uploaded_image.filename}: {str(delete_error)}")
-
-                    break
+            # Обрабатываем ошибки загрузки
+            upload_errors.extend(upload_results['failed'])
 
             if upload_errors:
+                # Откатываем уже загруженные файлы
+                self._rollback_uploaded_files(uploaded_images, s3_service)
+
                 return Response({
                     "error": "Upload failed",
                     "details": "Server error occurred during file upload"
@@ -134,17 +110,61 @@ class UploadImageView(APIView):
 
         except Exception as e:
             logger.error(f"Critical error: {str(e)}")
-            for uploaded_image in uploaded_images:
-                try:
-                    uploaded_image.delete()
-                    s3_client.delete_object(
-                        Bucket=bucket_name,
-                        Key=uploaded_image.filename
-                    )
-                except Exception as delete_error:
-                    logger.error(f"Error deleting {uploaded_image.filename}: {str(delete_error)}")
+            self._rollback_uploaded_files(uploaded_images, s3_service)
 
             return Response({
                 "error": "Upload failed",
                 "details": "Server error occurred during file upload"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _rollback_uploaded_files(self, uploaded_images, s3_service):
+        """
+        Откатывает уже загруженные файлы при ошибке
+        """
+        for uploaded_image in uploaded_images:
+            try:
+                uploaded_image.delete()
+                s3_service.delete_file(uploaded_image.filename)
+            except Exception as delete_error:
+                logger.error(f"Error deleting {uploaded_image.filename}: {str(delete_error)}")
+
+
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
+def mock_external_api(image):
+    """
+    Метод-заглушка, имитирующий ответ внешнего API.
+    """
+    # Здесь можно сымитировать обработку изображения
+    # и вернуть нужные данные
+    return {
+        'id': 1,
+        'file_id': 123,
+        'status': 'success',
+        'lat': '55.7558',
+        'lon': '37.6173',
+        'address': 'Москва, Красная площадь'
+    }
+
+@api_view(['POST'])
+def upload_image(request):
+    image = request.FILES.get('image')
+
+    if not image:
+        return Response({'error': 'No image provided'}, status=400)
+
+    # Вызываем заглушку вместо внешнего API
+    external_data = mock_external_api(image)
+
+    # Формируем нужный JSON
+    result = {
+        'id': external_data.get('id'),
+        'file_id': external_data.get('file_id'),
+        'status': external_data.get('status'),
+        'lat': external_data.get('lat'),
+        'lon': external_data.get('lon'),
+        'address': external_data.get('address'),
+    }
+
+    return Response(result, status=200)

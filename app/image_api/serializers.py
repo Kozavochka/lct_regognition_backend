@@ -5,5 +5,5 @@ from .models import UploadedImage
 class UploadedImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = UploadedImage
-        fields = ['id', 'filename', 's3_url', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'filename', 's3_url', 'uploaded_at']
+        read_only_fields = ['id', 'uploaded_at']
