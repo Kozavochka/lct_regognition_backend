@@ -7,13 +7,17 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['username', 'email', 'password']
+        fields = ['username', 'password']
+        extra_kwargs = {
+            'email': {'required': False, 'allow_blank': True}  # если оставляем поле, но не требуем
+        }
 
     def create(self, validated_data):
+        validated_data.pop('email', None)
         user = User.objects.create_user(
             username=validated_data['username'],
-            email=validated_data['email'],
-            password=validated_data['password']
+            password=validated_data['password'],
+            email=""
         )
         return user
 
@@ -26,3 +30,8 @@ class UserLoginSerializer(serializers.Serializer):
         if user and user.is_active:
             return user
         raise serializers.ValidationError("Неверные учетные данные")
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'username']

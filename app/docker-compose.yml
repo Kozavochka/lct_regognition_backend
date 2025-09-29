@@ -3,32 +3,34 @@ version: "3.9"
 services:
   django:
     build:
-      context: ./
+      context: .
       dockerfile: Dockerfile
     container_name: django
     env_file: .env
     working_dir: /app
     command: >
-      sh -c "python manage.py migrate &&
-             python manage.py collectstatic --noinput &&
-             gunicorn recognition_backend.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120"
+     sh -c "python manage.py migrate &&
+            python manage.py collectstatic --noinput &&
+            gunicorn recognition_backend.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120"
     volumes:
       - static_volume:/app/static
       - media_volume:/app/media
+      - .:/app
     depends_on:
       - postgres
       - minio
     ports:
     - "8000:8000"
-
+    networks:
+      - lct
     expose:
       - "8000"
     restart: unless-stopped
 
   nginx:
     build:
-      context: ./nginx
-      dockerfile: Dockerfile
+      context: ../nginx
+      dockerfile: ../nginx/Dockerfile
     container_name: nginx
     depends_on:
       - django
@@ -38,9 +40,12 @@ services:
       - static_volume:/var/www/static
       - media_volume:/var/www/media
     restart: unless-stopped
+    networks:
+      - lct
 
   postgres:
-    image: postgres:16-alpine
+#    image: postgres:16-alpine
+    image: postgis/postgis:15-3.3
     container_name: postgres
     env_file: .env
     volumes:
@@ -52,6 +57,8 @@ services:
       interval: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - lct
 
   minio:
     image: minio/minio:latest
@@ -70,6 +77,8 @@ services:
       interval: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - lct
 
 volumes:
   pg_data:
