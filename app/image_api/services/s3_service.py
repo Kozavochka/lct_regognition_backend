@@ -3,8 +3,7 @@ import logging
 import boto3
 from botocore.exceptions import ClientError
 from typing import List, Dict, Any, Optional
-
-# from app.recognition_backend.settings import AWS_S3_ENDPOINT_URL, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_REGION_NAME
+from urllib.parse import urlparse, urlunparse
 
 from django.conf import settings
 
@@ -126,3 +125,37 @@ class S3Service:
             return False
         except Exception:
             return False
+        
+    @staticmethod
+    def rewrite_presigned_url(url: str, public_host: str) -> str:
+        """
+        Подменяет хост в presigned URL на публичный (например, localhost:9000).
+        """
+        parts = urlparse(url)
+        parsed_public = urlparse(public_host if "://" in public_host else f"http://{public_host}")
+        new_parts = parts._replace(
+            scheme=parsed_public.scheme,
+            netloc=parsed_public.netloc
+        )
+        return urlunparse(new_parts)
+
+
+    def generate_presigned_url(self, filename: str, expires_in: int = 3600) -> Optional[str]:
+        """
+        Генерирует presigned URL для приватного объекта.
+        expires_in — срок жизни ссылки в секундах (по умолчанию 1 час).
+        """
+        try:
+            url = self.s3_client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": self.bucket_name, "Key": filename},
+                ExpiresIn=expires_in
+            )
+            public_host = settings.AWS_S3_PUBLIC_ENDPOINT
+            url = self.rewrite_presigned_url(url, public_host)
+            return url
+        except Exception as e:
+            logger.error(f"Error generating presigned URL for {filename}: {str(e)}")
+            return None
+        
+     

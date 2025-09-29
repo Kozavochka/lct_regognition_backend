@@ -321,7 +321,7 @@ class GetUserImageLocationsView(APIView):
             )
 
         # Фильтруем ImageLocation по пользователю
-        image_locations = ImageLocation.objects.filter(user=user).select_related('image', 'user')
+        image_locations = ImageLocation.objects.order_by('-id').filter(user=user).select_related('image', 'user')
 
         # Пагинация
         paginator = CustomPagination()
@@ -332,3 +332,22 @@ class GetUserImageLocationsView(APIView):
 
         # Возвращаем ответ с пагинацией
         return paginator.get_paginated_response(response_data)
+    
+class DeleteUserImageLocationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk, *args, **kwargs):
+        user = request.user
+
+        try:
+            # Ищем объект только у текущего пользователя
+            image_location = ImageLocation.objects.get(id=pk, user=user)
+        except ImageLocation.DoesNotExist:
+            return Response(
+                {"error": "ImageLocation not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Удаляем объект
+        image_location.delete()
+        return Response({"message": f"ImageLocation {pk} deleted"}, status=status.HTTP_200_OK)    
