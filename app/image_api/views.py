@@ -3,14 +3,19 @@ import uuid
 import boto3
 import logging
 
+from django.contrib.auth.models import User
+import requests
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.core.files.base import ContentFile
 
-from .models import UploadedImage
-from .serializers import UploadedImageSerializer
+from django.contrib.gis.geos import Point
+
+from .models import UploadedImage, ImageLocation
+from .serializers import UploadedImageSerializer, ImageLocationSerializer
 from .services.s3_service import S3Service
 
 logger = logging.getLogger(__name__)
@@ -74,13 +79,13 @@ class UploadImageView(APIView):
             # Обрабатываем успешные загрузки
             for success_file in upload_results['successful']:
                 try:
-                    # Сохраняем в БД
+                    # Сохраняем в БД как UploadedImage
                     uploaded = UploadedImage.objects.create(
                         filename=success_file['filename'],
                         original_filename=success_file['original_filename'],
-                        file_path=f"uploads/{success_file['filename']}",  # можно настроить как нужно
+                        file_path=f"uploads/{success_file['filename']}",
                         s3_url=success_file['url'],
-                        user_id=request.user.id  # или request.user если используется foreign key
+                        user=request.user
                     )
                     uploaded_images.append(uploaded)
                     logger.info(f"Database record created: {success_file['filename']}")
@@ -106,8 +111,33 @@ class UploadImageView(APIView):
                     "details": "Server error occurred during file upload"
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            serializer = UploadedImageSerializer(uploaded_images, many=True)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            # Создаём ImageLocation записи с status='processing', затем обновляем
+            image_locations = []
+            for uploaded_image in uploaded_images:
+                location = ImageLocation.objects.create(
+                    user=request.user,
+                    image=uploaded_image,
+                    status='processing',
+                    lat=None,
+                    lon=None
+                )
+
+                # Вызываем API синхронно
+                geo_data = self._mock_external_api_call(uploaded_image.id, uploaded_image.s3_url)
+
+                if geo_data:
+                    location.lat = float(geo_data['lat'])
+                    location.lon = float(geo_data['lot'])
+                    location.status = 'done'
+                else:
+                    location.status = 'done'  # или 'failed', если хотите отдельный статус
+
+                location.save()
+                image_locations.append(location)
+
+            # Сериализуем ImageLocation
+            serializer = ImageLocationSerializer(image_locations, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
 
         except Exception as e:
             logger.error(f"Critical error: {str(e)}")
@@ -129,43 +159,174 @@ class UploadImageView(APIView):
             except Exception as delete_error:
                 logger.error(f"Error deleting {uploaded_image.filename}: {str(delete_error)}")
 
+    def _process_images_with_external_api(self, uploaded_images, user_id):
+        """
+        Отправляет ID изображений на внешнее API и сохраняет результаты
+        """
+        user = User.objects.get(id=user_id)
 
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
+        results = []  # Список результатов для возврата
 
-def mock_external_api(image):
-    """
-    Метод-заглушка, имитирующий ответ внешнего API.
-    """
-    # Здесь можно сымитировать обработку изображения
-    # и вернуть нужные данные
-    return {
-        'id': 1,
-        'file_id': 123,
-        'status': 'success',
-        'lat': '55.7558',
-        'lon': '37.6173',
-        'address': 'Москва, Красная площадь'
-    }
+        for uploaded_image in uploaded_images:
+            try:
+                # Заменяем запрос на внешнее API на заглушку
+                response_data = self._mock_external_api_call(uploaded_image.id, uploaded_image.s3_url)
 
-@api_view(['POST'])
-def upload_image(request):
-    image = request.FILES.get('image')
+                # Имитируем статус ответа (предполагаем, что заглушка возвращает данные)
+                if response_data:  # Считаем, что если данные есть, то это "успешный" ответ
+                    result_data = response_data
 
-    if not image:
-        return Response({'error': 'No image provided'}, status=400)
+                    # Получаем lat и lon из ответа
+                    lat = result_data.get('lat')
+                    lon = result_data.get('lot')  # или 'lon' если API возвращает longitude так
 
-    # Вызываем заглушку вместо внешнего API
-    external_data = mock_external_api(image)
+                    # Создаем Point объект
+                    location = None
+                    if lat and lon:
+                        try:
+                            lat = float(lat)
+                            lon = float(lon)
+                            location = Point(lon, lat)  # В PostGIS порядок: (x, y) = (lon, lat)
+                        except (ValueError, TypeError):
+                            logger.warning(f"Invalid coordinates for image {uploaded_image.id}: lat={lat}, lon={lon}")
 
-    # Формируем нужный JSON
-    result = {
-        'id': external_data.get('id'),
-        'file_id': external_data.get('file_id'),
-        'status': external_data.get('status'),
-        'lat': external_data.get('lat'),
-        'lon': external_data.get('lon'),
-        'address': external_data.get('address'),
-    }
+                    # Создаем запись с результатами
+                    image_location = ImageLocation.objects.create(
+                        user=user,  # ForeignKey на User
+                        image=uploaded_image,  # ForeignKey на UploadedImage
+                        location=location,  # PointField
+                        address=result_data.get('address')
+                    )
 
-    return Response(result, status=200)
+                    # Возвращаем информацию
+                    result = {
+                        'image_location_id': image_location.id,
+                        'image_id': uploaded_image.id,
+                        'user': {
+                            'user_id': image_location.user.id,
+                            'username': image_location.user.username
+                        },
+                        'lat': lat,
+                        'lon': lon,  # используем 'lon' вместо 'lot'
+                        'address': result_data.get('address'),
+                        'status': 'success'
+                    }
+
+                else:
+                    logger.error(f"Mock API returned no data for image {uploaded_image.id}")
+                    image_location = ImageLocation.objects.create(
+                        user=user,
+                        image=uploaded_image,
+                        location=None,
+                        address=None
+                    )
+
+                    result = {
+                        'image_location_id': image_location.id,
+                        'image_id': uploaded_image.id,
+                        'user': {
+                            'user_id': image_location.user.id,
+                            'username': image_location.user.username
+                        },
+                        'lat': None,
+                        'lon': None,
+                        'address': None,
+                        'status': 'api_error'
+                    }
+
+            except Exception as e:
+                logger.error(f"Error processing image {uploaded_image.id}: {str(e)}")
+                image_location = ImageLocation.objects.create(
+                    user=user,
+                    image=uploaded_image,
+                    location=None,
+                    address=None
+                )
+
+                result = {
+                    'image_location_id': image_location.id,
+                    'image_id': uploaded_image.id,
+                    'user': {
+                        'user_id': image_location.user.id,
+                        'username': image_location.user.username
+                    },
+                    'lat': None,
+                    'lon': None,
+                    'address': None,
+                    'status': 'processing_error',
+                    'error': str(e)
+                }
+
+            results.append(result)
+
+        return results
+
+    def _mock_external_api_call(self, image_id, image_url):
+        """
+        Функция-заглушка для имитации внешнего API
+        Возвращает примерный ответ, который мог бы вернуть внешний API
+        """
+        import random
+
+        # Симулируем случайный результат
+        # В реальности вы можете вернуть фиксированные данные или случайные
+        mock_responses = [
+            {
+                "lat": "55.7558",
+                "lot": "37.6173",  # или "lon"
+                "address": "Москва, Красная площадь, 1"
+            },
+            {
+                "lat": "48.8566",
+                "lot": "2.3522",
+                "address": "Париж, Франция"
+            },
+            {
+                "lat": "40.7128",
+                "lot": "-74.0060",
+                "address": "Нью-Йорк, США"
+            },
+            {
+                "lat": "51.5074",
+                "lot": "-0.1278",
+                "address": "Лондон, Великобритания"
+            },
+            # Возвращаем None для симуляции ошибки
+            None
+        ]
+
+        # С вероятностью 1 из 5 возвращаем None (ошибка)
+        if random.randint(1, 5) == 1:
+            return None
+
+        # Выбираем случайный успешный ответ
+        return random.choice(mock_responses[:-1])  # исключаем None из выбора
+
+class CustomPageNumberPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+class GetUserImageLocationsView(APIView):
+    def get(self, request, *args, **kwargs):
+        # Получаем текущего пользователя
+        user = request.user
+
+        if not user.is_authenticated:
+            return Response(
+                {"error": "Authentication required"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        # Фильтруем ImageLocation по пользователю
+        image_locations = ImageLocation.objects.filter(user=user).select_related('image')
+
+        # Пагинация
+        paginator = CustomPageNumberPagination()
+        paginated_locations = paginator.paginate_queryset(image_locations, request)
+
+        # Сериализуем данные
+        serializer = ImageLocationSerializer(paginated_locations, many=True)
+
+        # Возвращаем ответ с пагинацией
+        return paginator.get_paginated_response(serializer.data)

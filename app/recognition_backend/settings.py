@@ -31,6 +31,7 @@ INSTALLED_APPS = [
 
     # Хранилище
     'storages',
+    'django.contrib.gis',
 
     # Утилиты
     'django_extensions',
@@ -46,7 +47,8 @@ ROOT_URLCONF = 'recognition_backend.urls'
 # База данных (Postgres)
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
+        # "ENGINE": "django.db.backends.postgresql",
+        "ENGINE": "django.contrib.gis.db.backends.postgis",
         "NAME": os.environ.get("POSTGRES_DB"),
         "USER": os.environ.get("POSTGRES_USER"),
         "PASSWORD": os.environ.get("POSTGRES_PASSWORD"),

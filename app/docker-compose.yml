@@ -44,7 +44,8 @@ services:
       - lct
 
   postgres:
-    image: postgres:16-alpine
+#    image: postgres:16-alpine
+    image: postgis/postgis:15-3.3
     container_name: postgres
     env_file: .env
     volumes:
