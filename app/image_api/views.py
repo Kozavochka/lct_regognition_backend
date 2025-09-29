@@ -136,8 +136,10 @@ class UploadImageView(APIView):
                 image_locations.append(location)
 
             # Сериализуем ImageLocation
-            serializer = ImageLocationSerializer(image_locations, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            # serializer = ImageLocationSerializer(image_locations, many=True)
+            # return Response(serializer.data, status=status.HTTP_200_OK)
+            response_data = [loc.to_dict() for loc in image_locations]
+            return Response(response_data, status=status.HTTP_200_OK)
 
         except Exception as e:
             logger.error(f"Critical error: {str(e)}")
@@ -319,14 +321,14 @@ class GetUserImageLocationsView(APIView):
             )
 
         # Фильтруем ImageLocation по пользователю
-        image_locations = ImageLocation.objects.filter(user=user).select_related('image')
+        image_locations = ImageLocation.objects.filter(user=user).select_related('image', 'user')
 
         # Пагинация
         paginator = CustomPageNumberPagination()
         paginated_locations = paginator.paginate_queryset(image_locations, request)
 
-        # Сериализуем данные
-        serializer = ImageLocationSerializer(paginated_locations, many=True)
+        # Формируем список словарей через to_dict()
+        response_data = [loc.to_dict() for loc in paginated_locations]
 
         # Возвращаем ответ с пагинацией
-        return paginator.get_paginated_response(serializer.data)
+        return paginator.get_paginated_response(response_data)

@@ -60,3 +60,24 @@ class ImageLocation(models.Model):
     @property
     def file_path(self):
         return self.image.s3_url or self.image.file_path
+
+    def to_dict(self):
+        """
+        Возвращает словарь с нужными полями для JSON-сериализации.
+        """
+        return {
+            "id": self.id,
+            "status": self.status,
+            "lat": self.lat,
+            "lon": self.lon,
+            "created_at": self.created_at.isoformat(),
+            "user": {
+                "id": self.user.id,
+                "username": self.user.username,
+            },
+            "image": {
+                "id": self.image.id,
+                "filename": self.image.filename,
+                "file_path": self.file_path,
+            },
+        }
