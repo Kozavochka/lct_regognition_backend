@@ -2,7 +2,6 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
-from django.contrib.gis.db import models as gis_models
 from django.db import models
 
 
@@ -38,6 +37,7 @@ class ImageLocation(models.Model):
         choices=[
             ('processing', 'Processing'),
             ('done', 'Done'),
+            ('failed', 'Failed'),
         ],
         default='processing'
     )

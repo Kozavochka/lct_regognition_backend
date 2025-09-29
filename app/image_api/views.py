@@ -12,8 +12,6 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.core.files.base import ContentFile
 
-from django.contrib.gis.geos import Point
-
 from .models import UploadedImage, ImageLocation
 from .pagination import CustomPagination
 from .serializers import UploadedImageSerializer, ImageLocationSerializer
@@ -183,21 +181,23 @@ class UploadImageView(APIView):
                     lat = result_data.get('lat')
                     lon = result_data.get('lot')  # или 'lon' если API возвращает longitude так
 
-                    # Создаем Point объект
-                    location = None
-                    if lat and lon:
-                        try:
-                            lat = float(lat)
-                            lon = float(lon)
-                            location = Point(lon, lat)  # В PostGIS порядок: (x, y) = (lon, lat)
-                        except (ValueError, TypeError):
-                            logger.warning(f"Invalid coordinates for image {uploaded_image.id}: lat={lat}, lon={lon}")
+                    # Проверяем и конвертируем координаты
+                    lat_f = None
+                    lon_f = None
+                    try:
+                        if lat is not None and lon is not None:
+                            lat_f = float(lat)
+                            lon_f = float(lon)
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid coordinates for image {uploaded_image.id}: lat={lat}, lon={lon}")
 
                     # Создаем запись с результатами
+                    # Предполагается, что ImageLocation теперь имеет поля lat и lon вместо location (PointField)
                     image_location = ImageLocation.objects.create(
                         user=user,  # ForeignKey на User
                         image=uploaded_image,  # ForeignKey на UploadedImage
-                        location=location,  # PointField
+                        lat=lat_f,  # Новое поле для широты
+                        lon=lon_f,  # Новое поле для долготы
                         address=result_data.get('address')
                     )
 
@@ -209,18 +209,20 @@ class UploadImageView(APIView):
                             'user_id': image_location.user.id,
                             'username': image_location.user.username
                         },
-                        'lat': lat,
-                        'lon': lon,  # используем 'lon' вместо 'lot'
+                        'lat': lat_f,
+                        'lon': lon_f,  # используем 'lon' вместо 'lot'
                         'address': result_data.get('address'),
                         'status': 'success'
                     }
 
                 else:
                     logger.error(f"Mock API returned no data for image {uploaded_image.id}")
+                    # Создаем запись без координат
                     image_location = ImageLocation.objects.create(
                         user=user,
                         image=uploaded_image,
-                        location=None,
+                        lat=None,  # Устанавливаем как None
+                        lon=None,  # Устанавливаем как None
                         address=None
                     )
 
@@ -239,10 +241,12 @@ class UploadImageView(APIView):
 
             except Exception as e:
                 logger.error(f"Error processing image {uploaded_image.id}: {str(e)}")
+                # В случае ошибки также создаем запись, но без данных
                 image_location = ImageLocation.objects.create(
                     user=user,
                     image=uploaded_image,
-                    location=None,
+                    lat=None,
+                    lon=None,
                     address=None
                 )
 
