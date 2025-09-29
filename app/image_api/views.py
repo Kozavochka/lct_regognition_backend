@@ -15,6 +15,7 @@ from django.core.files.base import ContentFile
 from django.contrib.gis.geos import Point
 
 from .models import UploadedImage, ImageLocation
+from .pagination import CustomPagination
 from .serializers import UploadedImageSerializer, ImageLocationSerializer
 from .services.s3_service import S3Service
 
@@ -304,11 +305,6 @@ class UploadImageView(APIView):
         # Выбираем случайный успешный ответ
         return random.choice(mock_responses[:-1])  # исключаем None из выбора
 
-class CustomPageNumberPagination(PageNumberPagination):
-    page_size = 10
-    page_size_query_param = 'page_size'
-    max_page_size = 100
-
 class GetUserImageLocationsView(APIView):
     def get(self, request, *args, **kwargs):
         # Получаем текущего пользователя
@@ -324,7 +320,7 @@ class GetUserImageLocationsView(APIView):
         image_locations = ImageLocation.objects.filter(user=user).select_related('image', 'user')
 
         # Пагинация
-        paginator = CustomPageNumberPagination()
+        paginator = CustomPagination()
         paginated_locations = paginator.paginate_queryset(image_locations, request)
 
         # Формируем список словарей через to_dict()
