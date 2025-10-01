@@ -1,6 +1,8 @@
 from django.contrib.auth.models import User
 from django.conf import settings
 from django.db import models
+from .services.s3_service import S3Service
+
 
 class UploadedImage(models.Model):
     filename = models.CharField(max_length=255, help_text="Уникальное имя файла")
@@ -58,6 +60,15 @@ class ImageLocation(models.Model):
     def file_path(self):
         return self.image.s3_url or self.image.file_path
 
+    @property
+    def preview_url(self):
+        """
+        Возвращает presigned URL для предпросмотра файла.
+        """
+        s3 = S3Service()
+        return s3.generate_presigned_url(self.image.filename)
+
+
     def to_dict(self):
         """
         Возвращает словарь с нужными полями для JSON-сериализации.
@@ -75,6 +86,7 @@ class ImageLocation(models.Model):
             "image": {
                 "id": self.image.id,
                 "filename": self.image.filename,
-                "file_path": self.file_path,
+                "file_path": self.file_path,               
+                "preview_url": self.preview_url
             },
         }
