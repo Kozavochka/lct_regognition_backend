@@ -1,10 +1,13 @@
+import json
 import os
 import uuid
 import boto3
 import logging
 
+from django.conf import settings
 from django.contrib.auth.models import User
 import requests
+from django.core.files.storage import default_storage
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -12,13 +15,13 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.core.files.base import ContentFile
 
-from .models import UploadedImage, ImageLocation
+from .models import UploadedImage, ImageLocation, ServerImage, ServerImageLocation
 from .pagination import CustomPagination
 from .serializers import UploadedImageSerializer, ImageLocationSerializer
 from .services.s3_service import S3Service
 
-logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
 
 class UploadImageView(APIView):
     permission_classes = [IsAuthenticated]
@@ -120,25 +123,35 @@ class UploadImageView(APIView):
                     lat=None,
                     lon=None
                 )
-
-                # Вызываем API синхронно
-                geo_data = self._mock_external_api_call(uploaded_image.id, uploaded_image.s3_url)
-
-                if geo_data:
-                    location.lat = float(geo_data['lat'])
-                    location.lon = float(geo_data['lot'])
-                    location.status = 'done'
-                else:
-                    location.status = 'done'  # или 'failed', если хотите отдельный статус
-
-                location.save()
                 image_locations.append(location)
 
-            # Сериализуем ImageLocation
-            # serializer = ImageLocationSerializer(image_locations, many=True)
-            # return Response(serializer.data, status=status.HTTP_200_OK)
-            response_data = [loc.to_dict() for loc in image_locations]
-            return Response(response_data, status=status.HTTP_200_OK)
+            # Подготавливаем массив данных для отправки в _send_geo_request
+            images_data = []
+            for uploaded_image in uploaded_images:
+                images_data.append({
+                    'image_id': uploaded_image.id,
+                    # 'image_path': uploaded_image.s3_url,
+                    'image_path': uploaded_image.filename
+                })
+
+            # Вызываем API один раз с массивом
+            geo_result = self._send_geo_request(images_data)
+
+            # Если нужно — обновить статусы ImageLocation на основе ошибок или успеха
+            # Например, пометить как 'failed' те, у которых есть ошибка
+            if geo_result:
+                for error in geo_result['errors']:
+                    task_id = error['task_id']
+                    try:
+                        # Находим ImageLocation по task_id (который совпадает с image_id)
+                        location = ImageLocation.objects.get(image__id=int(task_id))
+                        location.status = 'failed'
+                        location.save()
+                    except ImageLocation.DoesNotExist:
+                        logger.warning(f"ImageLocation not found for task_id={task_id}")
+
+            # Возвращаем пустое тело с 200 OK
+            return Response({}, status=status.HTTP_200_OK)
 
         except Exception as e:
             logger.error(f"Critical error: {str(e)}")
@@ -159,6 +172,98 @@ class UploadImageView(APIView):
                 s3_service.delete_file(uploaded_image.filename)
             except Exception as delete_error:
                 logger.error(f"Error deleting {uploaded_image.filename}: {str(delete_error)}")
+
+
+    def _send_geo_request(self, images):
+        """
+        Отправляет POST-запрос на внешний сервис для обработки списка изображений.
+
+        Args:
+            images (list): Список словарей с ключами 'image_id' и 'image_path'.
+
+        Returns:
+            dict: {
+                'success': list of task_ids successfully queued,
+                'errors': list of dicts with {'task_id', 'error'},
+                'raw_response': original response dict (optional)
+            }
+        """
+        callback_url = f"{settings.API_BASE_URL}:80/api/update-image-result/"
+        url = f"{settings.EXTERNAL_SERVICE_URL}:5000/api/Prediction"
+
+        tasks = []
+        for img in images:
+            image_id = img['image_id']
+            image_path = img['image_path']
+            tasks.append({
+                "fileName": image_path,
+                "taskId": str(image_id)
+            })
+
+        payload = {
+            "callbackUrl": callback_url,
+            "tasks": tasks
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "*/*"
+        }
+
+        try:
+            logger.info(f"Sending geo request for {len(tasks)} images")
+            logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
+
+            response = requests.post(url, data=json.dumps(payload), headers=headers, timeout=30)
+
+            logger.info(f"Geo service response status: {response.status_code}")
+
+            if response.status_code == 202:
+                try:
+                    result = response.json()
+                    logger.info(f"Geo service returned: {result}")
+
+                    # Извлекаем успешные job и ошибки
+                    jobs = result.get("jobs", [])
+                    validation_errors = result.get("validationErrors", [])
+
+                    # Формируем структурированный ответ
+                    structured_result = {
+                        'success': [job for job in jobs],  # можно преобразовать в int, если нужно
+                        'errors': [
+                            {
+                                'task_id': error.get('taskId'),
+                                'error': error.get('error')
+                            }
+                            for error in validation_errors
+                        ],
+                        'raw_response': result  # опционально, для отладки
+                    }
+
+                    return structured_result
+
+                except ValueError:
+                    logger.error("Geo service returned invalid JSON")
+                    return {
+                        'success': [],
+                        'errors': [],
+                        'raw_response': None
+                    }
+            else:
+                logger.error(f"Geo service returned non-202 status: {response.status_code}, body: {response.text}")
+                return {
+                    'success': [],
+                    'errors': [],
+                    'raw_response': None
+                }
+
+        except Exception as e:
+            logger.error(f"Exception while calling geo service: {e}", exc_info=True)
+            return {
+                'success': [],
+                'errors': [],
+                'raw_response': None
+            }
 
     def _process_images_with_external_api(self, uploaded_images, user_id):
         """
@@ -332,3 +437,202 @@ class GetUserImageLocationsView(APIView):
 
         # Возвращаем ответ с пагинацией
         return paginator.get_paginated_response(response_data)
+
+
+class ImageUploadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        print("FILES:", request.FILES)  # 👈 добавьте эту строку
+        print("FILES keys:", list(request.FILES.keys()))  # 👈 и эту
+
+        files = request.FILES.getlist("image")
+
+        if not files:
+            return Response({"error": "No files uploaded"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Валидация файлов
+        validated_files = []
+        validation_errors = []
+
+        for i, file_obj in enumerate(files):
+            try:
+                if not file_obj:
+                    validation_errors.append({
+                        "file_index": i,
+                        "filename": f"file_{i}",
+                        "error": "Empty or missing file"
+                    })
+                    continue
+
+                # filename = f"{uuid.uuid4()}_{file_obj.name}"
+                filename = file_obj.name
+                validated_files.append({
+                    'filename': filename,
+                    'file_obj': file_obj,
+                    'original_filename': file_obj.name,
+                    'index': i,
+                })
+
+            except Exception as e:
+                validation_errors.append({
+                    "file_index": i,
+                    "filename": file_obj.name if file_obj else f"file_{i}",
+                    "error": str(e)
+                })
+
+        if validation_errors:
+            return Response({
+                "validation_errors": validation_errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        saved_images = []
+        save_errors = []
+
+        try:
+            # Сохраняем файлы на сервер
+            for validated_file in validated_files:
+                try:
+                    file_path = os.path.join('uploads', validated_file['filename'])
+                    file_path_on_disk = default_storage.save(file_path, ContentFile(validated_file['file_obj'].read()))
+
+                    # fake_path = os.path.join(r"C:\Downloads\lct", validated_file['filename'])
+                    filename = validated_file['filename'].replace('/', os.sep)
+                    fake_path = os.path.join(r"C:\Downloads\lct", filename)
+
+                    server_image = ServerImage.objects.create(
+                        filename=validated_file['filename'],
+                        original_filename=validated_file['original_filename'],
+                        # file_path=file_path_on_disk,
+                        file_path=fake_path,
+                        user=request.user
+                    )
+                    saved_images.append(server_image)
+
+                    # Создаём ImageLocation со статусом 'processing'
+                    location = ServerImageLocation.objects.create(
+                        user=request.user,
+                        image=server_image,
+                        status='processing',
+                        lat=None,
+                        lon=None
+                    )
+
+                    # Отправляем запрос в geo-сервис и получаем jobId
+                    result = self._send_geo_request(server_image.id, server_image.file_path)
+
+                    if result and 'jobId' in result:
+                        # Можно сохранить jobId, если нужно, в будущем
+                        pass
+                    else:
+                        # Ошибка при вызове geo-сервиса
+                        location.status = 'failed'  # или оставить 'processing'
+                        location.save()
+
+                except Exception as e:
+                    logger.error(f"Error saving file {validated_file['filename']}: {str(e)}")
+                    save_errors.append({
+                        "file_index": validated_file['index'],
+                        "filename": validated_file['original_filename'],
+                        "error": str(e)
+                    })
+
+            if save_errors:
+                # Откат при ошибках
+                for img in saved_images:
+                    try:
+                        if default_storage.exists(img.file_path):
+                            default_storage.delete(img.file_path)
+                        img.delete()
+                    except Exception as e:
+                        logger.error(f"Rollback error for {img.filename}: {e}")
+
+                return Response({
+                    "error": "Upload failed",
+                    "details": "Server error occurred during file upload"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Возвращаем результаты
+            image_locations = [loc for loc in ServerImageLocation.objects.filter(image__in=saved_images)]
+            response_data = [loc.to_dict() for loc in image_locations]
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Critical error: {str(e)}")
+            for img in saved_images:
+                try:
+                    if default_storage.exists(img.file_path):
+                        default_storage.delete(img.file_path)
+                    img.delete()
+                except Exception as e2:
+                    logger.error(f"Rollback error for {img.filename}: {e2}")
+
+            return Response({
+                "error": "Upload failed",
+                "details": "Server error occurred during file upload"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _send_geo_request(self, image_id, image_path):
+        """
+        Отправляет POST-запрос на внешний сервис для обработки изображения.
+        """
+        callback_url = "http://127.0.0.1:80/api/update-image-result/"
+        # url = "http://51.250.115.228:8080/api/Prediction"
+        url = "http://host.docker.internal:5000/api/Prediction"
+
+        # Путь к файлу на диске (абсолютный)
+        full_file_path = image_path
+
+        payload = {
+            "callbackUrl": callback_url,
+            "tasks": [
+                {
+                    "filePath": full_file_path,
+                    "taskId": str(image_id)
+                }
+            ]
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "*/*"
+        }
+
+        try:
+            logger.info(f"Sending geo request for image {image_id} with path: {full_file_path}")
+            logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
+
+            response = requests.post(url, data=json.dumps(payload), headers=headers, timeout=30)
+
+            logger.info(f"Geo service response status: {response.status_code}")
+
+            if response.status_code == 202:
+                try:
+                    result = response.json()
+                    logger.info(f"Geo service returned: {result}")
+                    return result  # вернём весь ответ, чтобы можно было достать jobId
+                except ValueError:
+                    logger.error("Geo service returned invalid JSON")
+                    return None
+            else:
+                logger.error(f"Geo service returned non-202 status: {response.status_code}, body: {response.text}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Exception while calling geo service: {e}", exc_info=True)
+            return None
+        #     response = requests.post(
+        #         "http://host.docker.internal:5000/api/Prediction",  # URL внешнего сервиса
+        #         json=payload,
+        #         headers=headers
+        #     )
+        #     if response.status_code == 202:
+        #         # Здесь можно вернуть ответ, если нужно обработать сразу
+        #         return True
+        #     else:
+        #         print(f"Geo service returned status {response.status_code}")
+        #         return None
+        # except Exception as e:
+        #     print(f"Failed to call geo service: {e}")
+        #     return None

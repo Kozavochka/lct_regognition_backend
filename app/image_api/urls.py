@@ -2,12 +2,13 @@ from django.urls import path
 
 from . import views
 from .callbacks import image_location_callback
-from .views import UploadImageView, GetUserImageLocationsView
+from .views import UploadImageView, GetUserImageLocationsView, ImageUploadView
 
 urlpatterns = [
     path('upload-images/', UploadImageView.as_view(), name='upload_images'),
     path('user/image-locations/', GetUserImageLocationsView.as_view(), name='user-image-locations'),
-    path('update-result/', image_location_callback, name='image-location-callback'),
+    path('update-image-result/', image_location_callback, name='image-location-callback'),
+    # path('images/upload/', ImageUploadView.as_view(), name='upload-server-images'),
     # path('upload/', views.upload_image, name='upload_image'),
 ]
 

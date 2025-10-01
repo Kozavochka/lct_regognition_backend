@@ -7,6 +7,9 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+API_BASE_URL=os.environ.get("API_BASE_URL")
+EXTERNAL_SERVICE_URL=os.environ.get("EXTERNAL_SERVICE_URL")
+
 # Безопасность
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev")
 DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
@@ -127,11 +130,12 @@ if USE_S3_MEDIA:
     AWS_QUERYSTRING_AUTH = False
     AWS_S3_VERIFY = True
     MEDIA_URL = f"{os.environ.get('AWS_S3_ENDPOINT_URL')}/{AWS_STORAGE_BUCKET_NAME}/"
+    # MEDIA_URL = '/media/'
 
 # DRF — убираем SessionAuthentication, чтобы Postman не требовал CSRF
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.BasicAuthentication',
+        # 'rest_framework.authentication.BasicAuthentication',
         'rest_framework.authentication.TokenAuthentication',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
@@ -160,7 +164,7 @@ DJOSER = {
 from datetime import timedelta
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),       # Время жизни access-токена
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),       # Время жизни access-токена
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),          # Время жизни refresh-токена
     'ROTATE_REFRESH_TOKENS': True,                        # Обновлять refresh при использовании
     'BLACKLIST_AFTER_ROTATION': True,                     # Добавлять старые refresh в чёрный список
