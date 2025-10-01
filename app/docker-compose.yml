@@ -17,8 +17,12 @@ services:
       - media_volume:/app/media
       - .:/app
     depends_on:
+      - redis
       - postgres
-      - minio
+#      - minio
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/0
     ports:
     - "8000:8000"
     networks:
@@ -59,29 +63,38 @@ services:
     networks:
       - lct
 
-  minio:
-    image: minio/minio:latest
-    container_name: minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    volumes:
-      - minio_data:/data
+  redis:
+    image: redis:7-alpine
+    container_name: redis
     ports:
-      - "9000:9000"
-      - "9001:9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      retries: 5
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass "${REDIS_PASSWORD}"
     restart: unless-stopped
     networks:
       - lct
 
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celery
+    env_file: .env
+    working_dir: /app
+    command: celery -A recognition_backend worker --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - lct
+    restart: unless-stopped
+
 volumes:
   pg_data:
-  minio_data:
+  redis_data:
   static_volume:
   media_volume:
 

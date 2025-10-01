@@ -7,6 +7,9 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+API_BASE_URL=os.environ.get("API_BASE_URL")
+EXTERNAL_SERVICE_URL=os.environ.get("EXTERNAL_SERVICE_URL")
+
 # Безопасность
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev")
 DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
@@ -23,6 +26,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
 
     'djoser',
+
+    'drf_spectacular',
 
     # DRF и токены
     'rest_framework',
@@ -129,7 +134,6 @@ if USE_S3_MEDIA:
     MEDIA_URL = f"{os.environ.get('AWS_S3_ENDPOINT_URL')}/{AWS_STORAGE_BUCKET_NAME}/"
     AWS_S3_PUBLIC_ENDPOINT = os.getenv("AWS_S3_PUBLIC_ENDPOINT", AWS_S3_ENDPOINT_URL)
 
-
 # DRF — убираем SessionAuthentication, чтобы Postman не требовал CSRF
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -141,8 +145,24 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
 
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 10
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Image Upload and Location API',
+    'DESCRIPTION': 'Image Upload and Location API',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SECURITY_DEFINITIONS': {
+        'BearerAuth': {
+            'type': 'http',
+            'scheme': 'bearer',
+            'bearerFormat': 'JWT',
+        }
+    },
 }
 
 # Primary key
@@ -208,3 +228,17 @@ LOGGING = {
         },
     },
 }
+
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', '')
+REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
+REDIS_PORT = os.getenv('REDIS_PORT', 6379)
+
+CELERY_TASK_ALWAYS_EAGER = True  # False для продакшена
+CELERY_TASK_EAGER_PROPAGATES = True
+
+# CELERY_BROKER_URL = (
+#     f"redis://:{REDIS_PASSWORD}@{os.getenv('REDIS_HOST', 'redis')}:{os.getenv('REDIS_PORT', 6379)}/0"
+# )
+# CELERY_RESULT_BACKEND = (
+#     f"redis://:{REDIS_PASSWORD}@{os.getenv('REDIS_HOST', 'redis')}:{os.getenv('REDIS_PORT', 6379)}/0"
+# )

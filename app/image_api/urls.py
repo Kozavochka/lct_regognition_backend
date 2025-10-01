@@ -9,7 +9,6 @@ urlpatterns = [
     path('user/image-locations/', GetUserImageLocationsView.as_view(), name='user-image-locations'),
     path('update-result/', image_location_callback, name='image-location-callback'),
     path("image-locations/<int:pk>/", DeleteUserImageLocationView.as_view(), name="delete-image-location"),
-    # path('upload/', views.upload_image, name='upload_image'),
 ]
 
 # POST /api/upload-image/

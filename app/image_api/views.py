@@ -1,25 +1,168 @@
-import os
 import uuid
-import boto3
 import logging
 
-from django.contrib.auth.models import User
-import requests
-from rest_framework.pagination import PageNumberPagination
+from drf_spectacular.utils import OpenApiExample, OpenApiResponse, extend_schema
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from django.core.files.base import ContentFile
 
 from .models import UploadedImage, ImageLocation
 from .pagination import CustomPagination
-from .serializers import UploadedImageSerializer, ImageLocationSerializer
 from .services.s3_service import S3Service
+from .tasks import process_geo_tasks
+
 
 logger = logging.getLogger(__name__)
 
+upload_request_schema = {
+    "type": "object",
+    "properties": {
+        "image": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "format": "binary"
+            },
+            "description": "Массив файлов изображений"
+        }
+    },
+    "required": ["image"],
+    "additionalProperties": False
+}
 
+# Схема успешного ответа (пустой объект)
+success_response_schema = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": False
+}
+
+# Схема ошибки валидации
+validation_error_schema = {
+    "type": "object",
+    "properties": {
+        "validation_errors": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file_index": {"type": "integer"},
+                    "filename": {"type": "string"},
+                    "error": {"type": "string"}
+                },
+                "required": ["file_index", "filename", "error"]
+            }
+        }
+    },
+    "required": ["validation_errors"]
+}
+
+# Схема серверной ошибки
+server_error_schema = {
+    "type": "object",
+    "properties": {
+        "error": {"type": "string"},
+        "details": {"type": "string"}
+    },
+    "required": ["error", "details"]
+}
+
+@extend_schema(
+    request={
+        'multipart/form-data': {
+            'type': 'object',
+            'properties': {
+                'image': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'string',
+                        'format': 'binary'
+                    },
+                    'description': 'Массив файлов изображений',
+                    'example': ['file1.jpg', 'file2.png']
+                }
+            },
+            'required': ['image'],
+            'additionalProperties': False
+        }
+    },
+    responses={
+        200: OpenApiResponse(
+            description="Успешная загрузка. Нет тела ответа.",
+            response=None  # Пустой ответ
+        ),
+        400: OpenApiResponse(
+            description="Ошибка валидации файлов",
+            response={
+                "type": "object",
+                "properties": {
+                    "validation_errors": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "file_index": {"type": "integer"},
+                                "filename": {"type": "string"},
+                                "error": {"type": "string"}
+                            },
+                            "required": ["file_index", "filename", "error"]
+                        }
+                    }
+                },
+                "required": ["validation_errors"]
+            }
+        ),
+        500: OpenApiResponse(
+            description="Серверная ошибка",
+            response={
+                "type": "object",
+                "properties": {
+                    "error": {"type": "string"},
+                    "details": {"type": "string"}
+                },
+                "required": ["error", "details"]
+            }
+        )
+    },
+    examples=[
+        OpenApiExample(
+            name="Успешный запрос",
+            value={},
+            response_only=True,
+            status_codes=["200"]
+        ),
+        OpenApiExample(
+            name="Ошибка валидации",
+            value={
+                "validation_errors": [
+                    {
+                        "file_index": 0,
+                        "filename": "photo.jpg",
+                        "error": "Empty or missing file"
+                    }
+                ]
+            },
+            response_only=True,
+            status_codes=["400"]
+        ),
+        OpenApiExample(
+            name="Серверная ошибка",
+            value={
+                "error": "Upload failed",
+                "details": "Server error occurred during file upload"
+            },
+            response_only=True,
+            status_codes=["500"]
+        )
+    ],
+    summary="Загрузка изображений",
+    description=(
+        "Загружает одно или несколько изображений. "
+        "Файлы сохраняются в S3, создаётся запись в БД и запускается задача на определение геолокации. "
+        "В случае ошибки — возвращается список ошибок или общая ошибка сервера."
+    )
+)
 class UploadImageView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -120,25 +263,21 @@ class UploadImageView(APIView):
                     lat=None,
                     lon=None
                 )
-
-                # Вызываем API синхронно
-                geo_data = self._mock_external_api_call(uploaded_image.id, uploaded_image.s3_url)
-
-                if geo_data:
-                    location.lat = float(geo_data['lat'])
-                    location.lon = float(geo_data['lot'])
-                    location.status = 'done'
-                else:
-                    location.status = 'done'  # или 'failed', если хотите отдельный статус
-
-                location.save()
                 image_locations.append(location)
 
-            # Сериализуем ImageLocation
-            # serializer = ImageLocationSerializer(image_locations, many=True)
-            # return Response(serializer.data, status=status.HTTP_200_OK)
-            response_data = [loc.to_dict() for loc in image_locations]
-            return Response(response_data, status=status.HTTP_200_OK)
+            # Подготавливаем массив данных для отправки в _send_geo_request
+            images_data = []
+            for uploaded_image in uploaded_images:
+                images_data.append({
+                    'image_id': uploaded_image.id,
+                    # 'image_path': uploaded_image.s3_url,
+                    'image_path': uploaded_image.filename
+                })
+
+            process_geo_tasks.delay(images_data)
+
+            # Возвращаем пустое тело с 200 OK
+            return Response({}, status=status.HTTP_200_OK)
 
         except Exception as e:
             logger.error(f"Critical error: {str(e)}")
@@ -160,157 +299,88 @@ class UploadImageView(APIView):
             except Exception as delete_error:
                 logger.error(f"Error deleting {uploaded_image.filename}: {str(delete_error)}")
 
-    def _process_images_with_external_api(self, uploaded_images, user_id):
-        """
-        Отправляет ID изображений на внешнее API и сохраняет результаты
-        """
-        user = User.objects.get(id=user_id)
 
-        results = []  # Список результатов для возврата
 
-        for uploaded_image in uploaded_images:
-            try:
-                # Заменяем запрос на внешнее API на заглушку
-                response_data = self._mock_external_api_call(uploaded_image.id, uploaded_image.s3_url)
-
-                # Имитируем статус ответа (предполагаем, что заглушка возвращает данные)
-                if response_data:  # Считаем, что если данные есть, то это "успешный" ответ
-                    result_data = response_data
-
-                    # Получаем lat и lon из ответа
-                    lat = result_data.get('lat')
-                    lon = result_data.get('lot')  # или 'lon' если API возвращает longitude так
-
-                    # Проверяем и конвертируем координаты
-                    lat_f = None
-                    lon_f = None
-                    try:
-                        if lat is not None and lon is not None:
-                            lat_f = float(lat)
-                            lon_f = float(lon)
-                    except (ValueError, TypeError):
-                        logger.warning(f"Invalid coordinates for image {uploaded_image.id}: lat={lat}, lon={lon}")
-
-                    # Создаем запись с результатами
-                    # Предполагается, что ImageLocation теперь имеет поля lat и lon вместо location (PointField)
-                    image_location = ImageLocation.objects.create(
-                        user=user,  # ForeignKey на User
-                        image=uploaded_image,  # ForeignKey на UploadedImage
-                        lat=lat_f,  # Новое поле для широты
-                        lon=lon_f,  # Новое поле для долготы
-                        address=result_data.get('address')
-                    )
-
-                    # Возвращаем информацию
-                    result = {
-                        'image_location_id': image_location.id,
-                        'image_id': uploaded_image.id,
-                        'user': {
-                            'user_id': image_location.user.id,
-                            'username': image_location.user.username
-                        },
-                        'lat': lat_f,
-                        'lon': lon_f,  # используем 'lon' вместо 'lot'
-                        'address': result_data.get('address'),
-                        'status': 'success'
+@extend_schema(
+    summary="Получить локации изображений пользователя",
+    description=(
+        "Возвращает список геолокаций изображений текущего пользователя. "
+        "**Доступ только для суперпользователей или пользователей из группы 'Admins'.**"
+    ),
+    # security=[{"BearerAuth": []}],  # Показывает, что нужна авторизация
+    responses={
+        200: {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer"},
+                "next": {"type": "string", "nullable": True},
+                "previous": {"type": "string", "nullable": True},
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/components/schemas/ImageLocation"
                     }
-
-                else:
-                    logger.error(f"Mock API returned no data for image {uploaded_image.id}")
-                    # Создаем запись без координат
-                    image_location = ImageLocation.objects.create(
-                        user=user,
-                        image=uploaded_image,
-                        lat=None,  # Устанавливаем как None
-                        lon=None,  # Устанавливаем как None
-                        address=None
-                    )
-
-                    result = {
-                        'image_location_id': image_location.id,
-                        'image_id': uploaded_image.id,
-                        'user': {
-                            'user_id': image_location.user.id,
-                            'username': image_location.user.username
-                        },
-                        'lat': None,
-                        'lon': None,
-                        'address': None,
-                        'status': 'api_error'
-                    }
-
-            except Exception as e:
-                logger.error(f"Error processing image {uploaded_image.id}: {str(e)}")
-                # В случае ошибки также создаем запись, но без данных
-                image_location = ImageLocation.objects.create(
-                    user=user,
-                    image=uploaded_image,
-                    lat=None,
-                    lon=None,
-                    address=None
-                )
-
-                result = {
-                    'image_location_id': image_location.id,
-                    'image_id': uploaded_image.id,
-                    'user': {
-                        'user_id': image_location.user.id,
-                        'username': image_location.user.username
-                    },
-                    'lat': None,
-                    'lon': None,
-                    'address': None,
-                    'status': 'processing_error',
-                    'error': str(e)
                 }
-
-            results.append(result)
-
-        return results
-
-    def _mock_external_api_call(self, image_id, image_url):
-        """
-        Функция-заглушка для имитации внешнего API
-        Возвращает примерный ответ, который мог бы вернуть внешний API
-        """
-        import random
-
-        # Симулируем случайный результат
-        # В реальности вы можете вернуть фиксированные данные или случайные
-        mock_responses = [
-            {
-                "lat": "55.7558",
-                "lot": "37.6173",  # или "lon"
-                "address": "Москва, Красная площадь, 1"
             },
-            {
-                "lat": "48.8566",
-                "lot": "2.3522",
-                "address": "Париж, Франция"
+            "required": ["count", "results"]
+        },
+        401: OpenApiResponse(description="Неавторизованный доступ"),
+        403: OpenApiResponse(
+            description="Доступ запрещён. Только суперпользователи или админы.",
+            response={
+                "type": "object",
+                "properties": {
+                    "error": {"type": "string"}
+                },
+                "example": {"error": "Only superusers or admins are allowed"}
+            }
+        )
+    },
+    examples=[
+        OpenApiExample(
+            name="Успешный ответ",
+            value={
+                "count": 2,
+                "next": "http://localhost:8000/api/user-image-locations/?page=2",
+                "previous": None,
+                "results": [
+                    {
+                        "id": 1,
+                        "status": "done",
+                        "lat": 55.7558,
+                        "lon": 37.6176,
+                        "created_at": "2024-01-01T12:00:00Z",
+                        "user": {"id": 1, "username": "admin"},
+                        "image": {
+                            "id": 1,
+                            "filename": "uuid_123.jpg",
+                            "file_path": "https://s3.example.com/uploads/uuid_123.jpg"
+                        }
+                    }
+                ]
             },
-            {
-                "lat": "40.7128",
-                "lot": "-74.0060",
-                "address": "Нью-Йорк, США"
-            },
-            {
-                "lat": "51.5074",
-                "lot": "-0.1278",
-                "address": "Лондон, Великобритания"
-            },
-            # Возвращаем None для симуляции ошибки
-            None
-        ]
-
-        # С вероятностью 1 из 5 возвращаем None (ошибка)
-        if random.randint(1, 5) == 1:
-            return None
-
-        # Выбираем случайный успешный ответ
-        return random.choice(mock_responses[:-1])  # исключаем None из выбора
-
+            response_only=True,
+            status_codes=["200"]
+        ),
+        OpenApiExample(
+            name="Ошибка доступа",
+            value={"error": "Only superusers or admins are allowed"},
+            response_only=True,
+            status_codes=["403"]
+        )
+    ]
+)
 class GetUserImageLocationsView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, *args, **kwargs):
+        # Проверяем, является ли пользователь суперпользователем или админом
+        if not (request.user.is_superuser or request.user.groups.filter(name='Admins').exists()):
+            return Response(
+                {"error": "Only superusers or admins are allowed"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # Получаем текущего пользователя
         user = request.user
 
@@ -332,7 +402,7 @@ class GetUserImageLocationsView(APIView):
 
         # Возвращаем ответ с пагинацией
         return paginator.get_paginated_response(response_data)
-    
+
 class DeleteUserImageLocationView(APIView):
     permission_classes = [IsAuthenticated]
 
