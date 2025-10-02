@@ -7,7 +7,7 @@ from .views import UploadImageView, GetUserImageLocationsView, DeleteUserImageLo
 urlpatterns = [
     path('upload-images/', UploadImageView.as_view(), name='upload_images'),
     path('user/image-locations/', GetUserImageLocationsView.as_view(), name='user-image-locations'),
-    path('update-result/', image_location_callback, name='image-location-callback'),
+    path('update-image-result/', image_location_callback, name='image-location-callback'),
     path("image-locations/<int:pk>/", DeleteUserImageLocationView.as_view(), name="delete-image-location"),
 ]
 

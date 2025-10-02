@@ -20,8 +20,8 @@ def _send_geo_request_internal(images):
                 'raw_response': original response dict (optional)
             }
     """
-    callback_url = f"{settings.API_BASE_URL}:80/api/update-image-result/"
-    url = f"{settings.EXTERNAL_SERVICE_URL}:5000/api/Prediction"
+    callback_url = f"{settings.API_BASE_URL}:8000/api/update-image-result/"
+    url = f"{settings.EXTERNAL_SERVICE_URL}:8080/api/Prediction"
 
     tasks = []
     for img in images:

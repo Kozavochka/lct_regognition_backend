@@ -72,4 +72,4 @@ class UserViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
     pagination_class = UserPagination
-    permission_classes = [IsAdminUser]
+    # permission_classes = [IsAdminUser]
