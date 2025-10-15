@@ -233,12 +233,14 @@ REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', '')
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
 REDIS_PORT = os.getenv('REDIS_PORT', 6379)
 
-CELERY_TASK_ALWAYS_EAGER = True  # False для продакшена
+CELERY_TASK_ALWAYS_EAGER = False  # False для продакшена
 CELERY_TASK_EAGER_PROPAGATES = True
 
-# CELERY_BROKER_URL = (
-#     f"redis://:{REDIS_PASSWORD}@{os.getenv('REDIS_HOST', 'redis')}:{os.getenv('REDIS_PORT', 6379)}/0"
-# )
-# CELERY_RESULT_BACKEND = (
-#     f"redis://:{REDIS_PASSWORD}@{os.getenv('REDIS_HOST', 'redis')}:{os.getenv('REDIS_PORT', 6379)}/0"
-# )
+CELERY_BROKER_URL = (
+    f"redis://:{REDIS_PASSWORD}@{os.getenv('REDIS_HOST', 'redis')}:{os.getenv('REDIS_PORT', 6379)}/0"
+)
+CELERY_RESULT_BACKEND = (
+    f"redis://:{REDIS_PASSWORD}@{os.getenv('REDIS_HOST', 'redis')}:{os.getenv('REDIS_PORT', 6379)}/0"
+)
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60

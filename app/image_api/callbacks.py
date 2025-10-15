@@ -29,7 +29,6 @@ def image_location_callback(request):
     address = result.get("Address")
 
     try:
-        # Находим запись по TaskId (предполагается, что TaskId == ServerImageLocation.id)
         image_location = ImageLocation.objects.get(id=task_id)
 
         # Обновляем статус в зависимости от ответа
@@ -37,7 +36,6 @@ def image_location_callback(request):
             image_location.status = "done"
         elif status_response == "Failed":
             image_location.status = "failed"
-        # Можно добавить другие статусы, если нужно
 
         # Обновляем координаты и адрес, если статус успешный
         if status_response == "Succeeded":
