@@ -90,3 +90,10 @@ class ImageLocation(models.Model):
                 "preview_url": self.preview_url
             },
         }
+    
+class UploadedArchive(models.Model):
+    filename = models.CharField(max_length=255)
+    original_filename = models.CharField(max_length=255)
+    s3_url = models.URLField()
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)

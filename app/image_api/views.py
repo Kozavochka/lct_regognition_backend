@@ -7,11 +7,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from .models import UploadedImage, ImageLocation
+from .models import ImageLocation
 from .pagination import CustomPagination
-from .services.s3_service import S3Service
-from .tasks import process_geo_tasks
-
+from image_api.services.image_upload_service import ImageUploadService
+from image_api.services.archive_upload_service import ArchiveUploadService
 
 logger = logging.getLogger(__name__)
 
@@ -168,126 +167,21 @@ class UploadImageView(APIView):
 
     def post(self, request, *args, **kwargs):
         files = request.FILES.getlist("image")
-
         if not files:
-            return Response({"error": "No files uploaded"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Поле 'image' обязательно"}, status=400)
 
-        s3_service = S3Service()
-
-        # Сначала валидируем все файлы
-        validated_files = []
-        validation_errors = []
-
-        for i, file_obj in enumerate(files):
-            try:
-                if not file_obj:
-                    validation_errors.append({
-                        "file_index": i,
-                        "filename": f"file_{i}",
-                        "error": "Empty or missing file"
-                    })
-                    continue
-
-                filename = f"{uuid.uuid4()}_{file_obj.name}"
-                file_content = file_obj.read()
-
-                validated_files.append({
-                    'filename': filename,
-                    'content': file_content,
-                    'original_filename': file_obj.name,
-                    'index': i,
-                    'content_type': getattr(file_obj, 'content_type', 'application/octet-stream')
-                })
-
-            except Exception as e:
-                validation_errors.append({
-                    "file_index": i,
-                    "filename": file_obj.name if file_obj else f"file_{i}",
-                    "error": str(e)
-                })
+        service = ImageUploadService(request.user)
+        validated_files, validation_errors = service.validate_files(files)
 
         if validation_errors:
-            return Response({
-                "validation_errors": validation_errors
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"validation_errors": validation_errors}, status=status.HTTP_400_BAD_REQUEST)
 
-        uploaded_images = []
-        upload_errors = []
+        uploaded_images, errors = service.upload_and_process(validated_files)
 
-        try:
-            # Загружаем файлы в S3
-            upload_results = s3_service.batch_upload(validated_files)
+        if errors:
+            return Response({"error": "Upload failed", "details": errors}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            # Обрабатываем успешные загрузки
-            for success_file in upload_results['successful']:
-                try:
-                    # Сохраняем в БД как UploadedImage
-                    uploaded = UploadedImage.objects.create(
-                        filename=success_file['filename'],
-                        original_filename=success_file['original_filename'],
-                        file_path=f"uploads/{success_file['filename']}",
-                        s3_url=success_file['url'],
-                        user=request.user
-                    )
-                    uploaded_images.append(uploaded)
-                    logger.info(f"Database record created: {success_file['filename']}")
-                except Exception as db_error:
-                    logger.error(f"Database error for {success_file['filename']}: {str(db_error)}")
-                    # Если не удалось сохранить в БД, удаляем файл из S3
-                    s3_service.delete_file(success_file['filename'])
-                    upload_errors.append({
-                        "file_index": success_file['index'],
-                        "filename": success_file['original_filename'],
-                        "error": f"Database error: {str(db_error)}"
-                    })
-
-            # Обрабатываем ошибки загрузки
-            upload_errors.extend(upload_results['failed'])
-
-            if upload_errors:
-                # Откатываем уже загруженные файлы
-                self._rollback_uploaded_files(uploaded_images, s3_service)
-
-                return Response({
-                    "error": "Upload failed",
-                    "details": "Server error occurred during file upload"
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            # Создаём ImageLocation записи с status='processing', затем обновляем
-            image_locations = []
-            for uploaded_image in uploaded_images:
-                location = ImageLocation.objects.create(
-                    user=request.user,
-                    image=uploaded_image,
-                    status='processing',
-                    lat=None,
-                    lon=None
-                )
-                image_locations.append(location)
-
-            # Подготавливаем массив данных для отправки в _send_geo_request
-            images_data = []
-            for uploaded_image in uploaded_images:
-                images_data.append({
-                    'image_id': uploaded_image.id,
-                    # 'image_path': uploaded_image.s3_url,
-                    'image_path': uploaded_image.filename
-                })
-
-            process_geo_tasks.delay(images_data)
-
-            # Возвращаем пустое тело с 200 OK
-            return Response({}, status=status.HTTP_200_OK)
-
-        except Exception as e:
-            logger.error(f"Critical error: {str(e)}")
-            self._rollback_uploaded_files(uploaded_images, s3_service)
-
-            return Response({
-                "error": "Upload failed",
-                "details": "Server error occurred during file upload"
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+        return Response({}, status=status.HTTP_200_OK)
     def _rollback_uploaded_files(self, uploaded_images, s3_service):
         """
         Откатывает уже загруженные файлы при ошибке
@@ -298,8 +192,21 @@ class UploadImageView(APIView):
                 s3_service.delete_file(uploaded_image.filename)
             except Exception as delete_error:
                 logger.error(f"Error deleting {uploaded_image.filename}: {str(delete_error)}")
+    
+class UploadArchiveView(APIView):
+    permission_classes = [IsAuthenticated]
 
+    def post(self, request, *args, **kwargs):
+        file_obj = request.FILES.get("archive")
+        if not file_obj:
+            return Response({"error": "No archive uploaded"}, status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            service = ArchiveUploadService(request.user)
+            archive = service.upload_archive(file_obj)
+            return Response({"message": "Archive uploaded", "archive_id": archive.id}, status=status.HTTP_202_ACCEPTED)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @extend_schema(
     summary="Получить локации изображений пользователя",

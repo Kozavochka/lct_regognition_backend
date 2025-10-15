@@ -31,22 +31,6 @@ services:
       - "8000"
     restart: unless-stopped
 
-  nginx:
-    build:
-      context: ../nginx
-      dockerfile: ../nginx/Dockerfile
-    container_name: nginx
-    depends_on:
-      - django
-    ports:
-      - "80:80"
-    volumes:
-      - static_volume:/var/www/static
-      - media_volume:/var/www/media
-    restart: unless-stopped
-    networks:
-      - lct
-
   postgres:
     image: postgres:16-alpine
     container_name: postgres
