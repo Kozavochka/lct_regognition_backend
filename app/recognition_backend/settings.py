@@ -39,6 +39,7 @@ INSTALLED_APPS = [
 
     # Утилиты
     'django_extensions',
+    'django_filters',
 
     # Твои приложения
     'authapi',
