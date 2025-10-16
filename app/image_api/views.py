@@ -1,12 +1,14 @@
 import uuid
 import logging
 
+from django.utils.dateparse import parse_date
 from drf_spectacular.utils import OpenApiExample, OpenApiResponse, extend_schema
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
+from .filters import ImageLocationFilter
 from .models import ImageLocation
 from .pagination import CustomPagination
 from image_api.services.image_upload_service import ImageUploadService
@@ -282,11 +284,11 @@ class GetUserImageLocationsView(APIView):
 
     def get(self, request, *args, **kwargs):
         # Проверяем, является ли пользователь суперпользователем или админом
-        if not (request.user.is_superuser or request.user.groups.filter(name='Admins').exists()):
-            return Response(
-                {"error": "Only superusers or admins are allowed"},
-                status=status.HTTP_403_FORBIDDEN
-            )
+        # if not (request.user.is_superuser or request.user.groups.filter(name='Admins').exists()):
+        #     return Response(
+        #         {"error": "Only superusers or admins are allowed"},
+        #         status=status.HTTP_403_FORBIDDEN
+        #     )
 
         # Получаем текущего пользователя
         user = request.user
@@ -297,12 +299,55 @@ class GetUserImageLocationsView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
+        # === Фильтрация ===
+        filters = {'user': user}  # всегда фильтруем по пользователю
+
+        query_params = request.query_params.copy()
+
+        # Фильтрация по дате (только дата, без времени)
+        created_date_after = query_params.get('created_date_after')
+        created_date_before = query_params.get('created_date_before')
+
+        if created_date_after:
+            parsed_date = parse_date(created_date_after)
+            if not parsed_date:
+                return Response(
+                    {"error": "Invalid date format for 'created_date_after'. Expected YYYY-MM-DD."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Фильтр: created_at >= начало дня
+            filters['created_at__date__gte'] = parsed_date
+
+        if created_date_before:
+            parsed_date = parse_date(created_date_before)
+            if not parsed_date:
+                return Response(
+                    {"error": "Invalid date format for 'created_date_before'. Expected YYYY-MM-DD."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Фильтр: created_at <= конец дня
+            filters['created_at__date__lte'] = parsed_date
+
+
+        if 'radius_km' not in query_params:
+            query_params['radius_km'] = 10
+
+        # Применяем фильтрацию
+        image_locations = ImageLocation.objects.filter(
+            **filters,
+            lat__isnull=False,
+            lon__isnull=False
+        ).select_related('image', 'user')
+        # image_locations = ImageLocation.objects.filter(**filters).select_related('image', 'user').order_by('-id')
+
+        filtered_queryset = ImageLocationFilter(query_params, queryset=image_locations).qs
+
         # Фильтруем ImageLocation по пользователю
-        image_locations = ImageLocation.objects.order_by('-id').filter(user=user).select_related('image', 'user')
+        # image_locations = ImageLocation.objects.order_by('-id').filter(user=user).select_related('image', 'user')
 
         # Пагинация
         paginator = CustomPagination()
-        paginated_locations = paginator.paginate_queryset(image_locations, request)
+        paginated_locations = paginator.paginate_queryset(filtered_queryset, request)
 
         # Формируем список словарей через to_dict()
         response_data = [loc.to_dict() for loc in paginated_locations]
