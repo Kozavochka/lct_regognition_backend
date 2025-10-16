@@ -27,7 +27,7 @@ from image_api.services.s3_service import S3Service
 
 # --- параметры ---
 CSV_FILENAME = "table.csv"           # имя CSV-файла в S3
-HARDCODED_USER_ID = 1                 # id пользователя
+HARDCODED_USER_ID = 34                 # id пользователя
 
 # --- инициализация ---
 User = get_user_model()
