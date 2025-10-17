@@ -27,9 +27,17 @@ def _send_geo_request_internal(images):
     for img in images:
         task_id = img['task_id']
         image_filename = img['image_filename']
+        angle = img['angle']
+        height = img['height']
+        lat = img['lat']
+        lon = img['lon']
         tasks.append({
             "fileName": image_filename,
-            "taskId": str(task_id)
+            "taskId": str(task_id),
+            "angle": angle,
+            "height": height,
+            "lat": lat,
+            "lon": lon,
         })
 
     payload = {

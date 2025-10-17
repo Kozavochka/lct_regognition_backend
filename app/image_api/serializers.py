@@ -13,6 +13,8 @@ class ImageLocationSerializer(serializers.ModelSerializer):
     height = serializers.FloatField(allow_null=True, required=False)
     angle = serializers.FloatField(allow_null=True, required=False)
     error_reason = serializers.CharField(allow_null=True,required=False)
+    lat = serializers.SerializerMethodField(allow_null=True, required=False)
+    lon = serializers.SerializerMethodField(allow_null=True, required=False)
     file_path = serializers.SerializerMethodField()
     status_display = serializers.CharField(source='get_status_display', read_only=True)
 
@@ -26,6 +28,8 @@ class ImageLocationSerializer(serializers.ModelSerializer):
             'height',
             'angle',
             'error_reason',
+            'lat',
+            'lon',
             'file_path',
             'status',
             'status_display',

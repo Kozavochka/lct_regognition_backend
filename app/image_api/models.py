@@ -45,6 +45,8 @@ class ImageLocation(models.Model):
     height = models.FloatField(null=True, blank=True)
     angle = models.FloatField(null=True, blank=True)
     error_reason = models.TextField(null=True, blank=True)
+    lat = models.FloatField(null=True, blank=True)
+    lon = models.FloatField(null=True, blank=True)
 
     # Время создания
     created_at = models.DateTimeField(auto_now_add=True)
@@ -81,6 +83,8 @@ class ImageLocation(models.Model):
             "height": self.height,
             "angle": self.angle,
             "error_reason": self.error_reason,
+            "lat": self.lat,
+            "lon": self.lon,
             "created_at": self.created_at.isoformat(),
             "user": {
                 "id": self.user.id,

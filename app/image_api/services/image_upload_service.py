@@ -92,7 +92,11 @@ class ImageUploadService:
         images_data = [
             {
                 "task_id": loc.id,                       
-                "image_filename": loc.image.filename 
+                "image_filename": loc.image.filename,
+                "angle": loc.angle,
+                "height": loc.height,
+                "lat": loc.lat,
+                "lon": loc.lon,
             }
             for loc in image_locations
         ]
