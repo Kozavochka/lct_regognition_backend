@@ -34,3 +34,4 @@ redis==6.4.0
 drf-spectacular==0.28.0
 django_filter==25.2
 pandas==2.3.3
+geopy

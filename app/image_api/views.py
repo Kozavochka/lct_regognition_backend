@@ -7,14 +7,19 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from geopy.geocoders import Nominatim
 
 from .filters import ImageLocationFilter
 from .models import ImageLocation
 from .pagination import CustomPagination
 from image_api.services.image_upload_service import ImageUploadService
 from image_api.services.archive_upload_service import ArchiveUploadService
+from .serializers import UploadImagesRequestSerializer, ImageDataSerializer
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_ANGLE=0
+DEFAULT_HEIGHT=1.5
 
 upload_request_schema = {
     "type": "object",
@@ -168,13 +173,62 @@ class UploadImageView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
-        files = request.FILES.getlist("image")
-        if not files:
-            return Response({"error": "Поле 'image' обязательно"}, status=400)
+        raw = request.data
+        files = request.FILES
+
+        images_data = []
+        i = 0
+        while f"images_data[{i}][image]" in raw or f"images_data[{i}][address]" in raw:
+            images_data.append({
+                "image": files.get(f"images_data[{i}][image]"),
+                "address": raw.get(f"images_data[{i}][address]"),
+                "lat": raw.get(f"images_data[{i}][lat]"),
+                "lon": raw.get(f"images_data[{i}][lon]"),
+                "angle": raw.get(f"images_data[{i}][angle]", DEFAULT_ANGLE),
+                "height": raw.get(f"images_data[{i}][height]", DEFAULT_HEIGHT),
+            })
+            i += 1
+
+        serializer = ImageDataSerializer(data=images_data, many=True)
+        serializer.is_valid(raise_exception=True)
+        geolocator = Nominatim(user_agent="my_app")
+        images_data = serializer.validated_data
+        processed = []
+        for item in images_data:
+            image = item["image"]
+            address = item.get("address")
+            lat = item.get("lat")
+            lon = item.get("lon")
+
+            # Если есть адрес, но нет координат → геокодируем
+            if address and (lat is None or lon is None):
+                try:
+                    loc = geolocator.geocode(address)
+                    if loc:
+                        lat, lon = loc.latitude, loc.longitude
+                except Exception as e:
+                    print(f" Ошибка геокодирования {address}: {e}")
+
+            # Если есть координаты, но нет адреса → обратное геокодирование
+            if (lat is not None and lon is not None) and not address:
+                try:
+                    loc = geolocator.reverse((lat, lon))
+                    if loc:
+                        address = loc.address
+                except Exception as e:
+                    print(f"Ошибка reverse для {lat}, {lon}: {e}")
+
+            processed.append({
+                "image": image,
+                "address": address,
+                "lat": lat,
+                "lon": lon,
+                "angle": item.get("angle"),
+                "height": item.get("height"),
+            })
 
         service = ImageUploadService(request.user)
-        validated_files, validation_errors = service.validate_files(files)
-
+        validated_files, validation_errors = service.validate_files(processed)
         if validation_errors:
             return Response({"validation_errors": validation_errors}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -333,11 +387,7 @@ class GetUserImageLocationsView(APIView):
             query_params['radius_km'] = 10
 
         # Применяем фильтрацию
-        image_locations = ImageLocation.objects.filter(
-            **filters,
-            lat__isnull=False,
-            lon__isnull=False
-        ).select_related('image', 'user')
+        image_locations = ImageLocation.objects.filter(**filters).select_related('image', 'user').order_by('-id')
         # image_locations = ImageLocation.objects.filter(**filters).select_related('image', 'user').order_by('-id')
 
         filtered_queryset = ImageLocationFilter(query_params, queryset=image_locations).qs

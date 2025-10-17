@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import UploadedImage, ImageLocation
+from .models import UploadedImage, ImageLocation, DetectedImageLocation
 
 
 class UploadedImageSerializer(serializers.ModelSerializer):
@@ -9,8 +9,12 @@ class UploadedImageSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'uploaded_at']
 
 class ImageLocationSerializer(serializers.ModelSerializer):
-    lat = serializers.SerializerMethodField()
-    lon = serializers.SerializerMethodField()
+    address = serializers.CharField(allow_null=True, required=False)
+    height = serializers.FloatField(allow_null=True, required=False)
+    angle = serializers.FloatField(allow_null=True, required=False)
+    error_reason = serializers.CharField(allow_null=True,required=False)
+    lat = serializers.SerializerMethodField(allow_null=True, required=False)
+    lon = serializers.SerializerMethodField(allow_null=True, required=False)
     file_path = serializers.SerializerMethodField()
     status_display = serializers.CharField(source='get_status_display', read_only=True)
 
@@ -20,6 +24,10 @@ class ImageLocationSerializer(serializers.ModelSerializer):
             'id',
             'user',
             'image',
+            'address',
+            'height',
+            'angle',
+            'error_reason',
             'lat',
             'lon',
             'file_path',
@@ -29,15 +37,34 @@ class ImageLocationSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_at']
 
-    def get_lat(self, obj):
-        return obj.lat
-
-    def get_lon(self, obj):
-        return obj.lon
-
     def get_file_path(self, obj):
         return obj.file_path  # используем свойство модели
 
     def get_status_display(self, obj):
         # Если у модели нет метода get_status_display, можно вернуть просто status
         return obj.get_status_display() if hasattr(obj, 'get_status_display') else obj.status
+
+class DetectedImageLocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DetectedImageLocation
+        fields = [
+            'id',
+            'file',
+            'image_location',
+            'lat',
+            'lon',
+            'created_at',
+        ]
+        read_only_fields = ['created_at']
+
+class ImageDataSerializer(serializers.Serializer):
+    image = serializers.FileField()
+    address = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    lat = serializers.FloatField(required=False, allow_null=True)
+    lon = serializers.FloatField(required=False, allow_null=True)
+    angle = serializers.FloatField(required=False, allow_null=True)
+    height = serializers.FloatField(required=False, allow_null=True)
+
+
+class UploadImagesRequestSerializer(serializers.Serializer):
+    images_data = ImageDataSerializer(many=True)

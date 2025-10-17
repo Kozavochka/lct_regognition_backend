@@ -11,11 +11,12 @@ class ImageUploadService:
         self.user = user
         self.s3_service = S3Service()
 
-    def validate_files(self, files):
+    def validate_files(self, processed):
         validated_files = []
         validation_errors = []
 
-        for i, file_obj in enumerate(files):
+        for i, item in enumerate(processed):
+            file_obj = item.get("image")
             try:
                 if not file_obj:
                     validation_errors.append({
@@ -29,11 +30,16 @@ class ImageUploadService:
                 file_content = file_obj.read()
 
                 validated_files.append({
-                    'filename': filename,
-                    'content': file_content,
-                    'original_filename': file_obj.name,
-                    'index': i,
-                    'content_type': getattr(file_obj, 'content_type', 'application/octet-stream')
+                    "filename": filename,
+                    "content": file_content,
+                    "original_filename": file_obj.name,
+                    "index": i,
+                    "content_type": getattr(file_obj, "content_type", "application/octet-stream"),
+                    "address": item.get("address"),
+                    "lat": item.get("lat"),
+                    "lon": item.get("lon"),
+                    "angle": item.get("angle"),
+                    "height": item.get("height"),
                 })
             except Exception as e:
                 validation_errors.append({
@@ -52,6 +58,7 @@ class ImageUploadService:
 
         upload_results = self.s3_service.batch_upload(validated_files)
 
+        # Успешные загрузки
         for success_file in upload_results['successful']:
             try:
                 uploaded = UploadedImage.objects.create(
@@ -61,6 +68,8 @@ class ImageUploadService:
                     s3_url=success_file['url'],
                     user=self.user
                 )
+                # сохраняем index, чтобы потом найти метаданные
+                uploaded._file_index = success_file['index']
                 uploaded_images.append(uploaded)
                 logger.info(f"Database record created: {success_file['filename']}")
             except Exception as db_error:
@@ -78,27 +87,40 @@ class ImageUploadService:
             self._rollback(uploaded_images)
             return None, upload_errors
 
-        # Создаём ImageLocation
+        # Создаём ImageLocation с метаданными
         image_locations = []
         for uploaded_image in uploaded_images:
+            # ищем словарь из validated_files по index
+            meta = next((f for f in validated_files if f["index"] == uploaded_image._file_index), {})
+
             location = ImageLocation.objects.create(
                 user=self.user,
                 image=uploaded_image,
-                status='processing'
+                status='processing',
+                address=meta.get("address"),
+                lat=meta.get("lat"),
+                lon=meta.get("lon"),
+                angle=meta.get("angle"),
+                height=meta.get("height"),
             )
             image_locations.append(location)
 
         # Отправляем в Celery
         images_data = [
             {
-                "task_id": loc.id,                       
-                "image_filename": loc.image.filename 
+                "task_id": loc.id,
+                "image_filename": loc.image.filename,
+                "angle": loc.angle,
+                "height": loc.height,
+                "lat": loc.lat,
+                "lon": loc.lon,
             }
             for loc in image_locations
         ]
         process_geo_tasks.delay(images_data)
 
         return uploaded_images, None
+
 
     def _rollback(self, uploaded_images):
         for uploaded_image in uploaded_images:
