@@ -41,9 +41,10 @@ class ImageLocation(models.Model):
         default='processing'
     )
 
-    # Координаты (lat/lon) — вместо PointField
-    lat = models.FloatField(null=True, blank=True, help_text="Широта")
-    lon = models.FloatField(null=True, blank=True, help_text="Долгота")
+    address = models.CharField(max_length=500, null=True, blank=True)
+    height = models.FloatField(null=True, blank=True)
+    angle = models.FloatField(null=True, blank=True)
+    error_reason = models.TextField(null=True, blank=True)
 
     # Время создания
     created_at = models.DateTimeField(auto_now_add=True)
@@ -76,8 +77,10 @@ class ImageLocation(models.Model):
         return {
             "id": self.id,
             "status": self.status,
-            "lat": self.lat,
-            "lon": self.lon,
+            "address": self.address,
+            "height": self.height,
+            "angle": self.angle,
+            "error_reason": self.error_reason,
             "created_at": self.created_at.isoformat(),
             "user": {
                 "id": self.user.id,
@@ -96,4 +99,22 @@ class UploadedArchive(models.Model):
     original_filename = models.CharField(max_length=255)
     s3_url = models.URLField()
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class DetectedImageLocation(models.Model):
+    file = models.ForeignKey(
+        'UploadedImage',
+        on_delete=models.CASCADE,
+        related_name='detected_locations',
+    )
+
+    image_location = models.ForeignKey(
+        'ImageLocation',
+        on_delete=models.CASCADE,
+        related_name='detected_image_mappings'
+    )
+
+    lat = models.FloatField(null=True, blank=True)
+    lon = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
