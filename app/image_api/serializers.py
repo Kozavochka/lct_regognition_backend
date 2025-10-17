@@ -56,3 +56,15 @@ class DetectedImageLocationSerializer(serializers.ModelSerializer):
             'created_at',
         ]
         read_only_fields = ['created_at']
+
+class ImageDataSerializer(serializers.Serializer):
+    image = serializers.FileField()
+    address = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    lat = serializers.FloatField(required=False, allow_null=True)
+    lon = serializers.FloatField(required=False, allow_null=True)
+    angle = serializers.FloatField(required=False, allow_null=True)
+    height = serializers.FloatField(required=False, allow_null=True)
+
+
+class UploadImagesRequestSerializer(serializers.Serializer):
+    images_data = ImageDataSerializer(many=True)

@@ -11,11 +11,12 @@ class ImageUploadService:
         self.user = user
         self.s3_service = S3Service()
 
-    def validate_files(self, files):
+    def validate_files(self, processed):
         validated_files = []
         validation_errors = []
 
-        for i, file_obj in enumerate(files):
+        for i, item in enumerate(processed):
+            file_obj = item.get("image")
             try:
                 if not file_obj:
                     validation_errors.append({
@@ -29,11 +30,16 @@ class ImageUploadService:
                 file_content = file_obj.read()
 
                 validated_files.append({
-                    'filename': filename,
-                    'content': file_content,
-                    'original_filename': file_obj.name,
-                    'index': i,
-                    'content_type': getattr(file_obj, 'content_type', 'application/octet-stream')
+                    "filename": filename,
+                    "content": file_content,
+                    "original_filename": file_obj.name,
+                    "index": i,
+                    "content_type": getattr(file_obj, "content_type", "application/octet-stream"),
+                    "address": item.get("address"),
+                    "lat": item.get("lat"),
+                    "lon": item.get("lon"),
+                    "angle": item.get("angle"),
+                    "height": item.get("height"),
                 })
             except Exception as e:
                 validation_errors.append({
