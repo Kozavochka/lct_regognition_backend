@@ -73,29 +73,45 @@ class ImageLocation(models.Model):
 
 
     def to_dict(self):
-        """
-        Возвращает словарь с нужными полями для JSON-сериализации.
-        """
+        if self.lat is not None and self.lon is not None:
+            main_coordinates = {"lat": self.lat, "lon": self.lon}
+        else:
+            main_coordinates = None
+        trash_images = []
+        for det in self.detected_image_mappings.all():
+            trash_images.append({
+                "id": det.id,
+                "image": {
+                    "id": det.file.id,
+                    "filename": det.file.filename,
+                    "file_path": det.file.s3_url or det.file.file_path,
+                    "preview_url": self.preview_url,
+                    # preview_url можно тоже добавить, если нужно
+                },
+                "lat": det.lat,
+                "lon": det.lon,
+            })
+
         return {
             "id": self.id,
             "status": self.status,
-            "address": self.address,
-            "height": self.height,
-            "angle": self.angle,
-            "error_reason": self.error_reason,
-            "lat": self.lat,
-            "lon": self.lon,
             "created_at": self.created_at.isoformat(),
             "user": {
                 "id": self.user.id,
                 "username": self.user.username,
             },
-            "image": {
+            "main_address": self.address,
+            "height": self.height,
+            "angle": self.angle,
+            "error_reason": self.error_reason,
+            "main_coordinates": main_coordinates,
+            "main_image": {
                 "id": self.image.id,
                 "filename": self.image.filename,
-                "file_path": self.file_path,               
-                "preview_url": self.preview_url
+                "file_path": self.file_path,
+                "preview_url": self.preview_url,
             },
+            "trash_images": trash_images,
         }
     
 class UploadedArchive(models.Model):

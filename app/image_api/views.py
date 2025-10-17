@@ -387,11 +387,7 @@ class GetUserImageLocationsView(APIView):
             query_params['radius_km'] = 10
 
         # Применяем фильтрацию
-        image_locations = ImageLocation.objects.filter(
-            **filters,
-            lat__isnull=False,
-            lon__isnull=False
-        ).select_related('image', 'user')
+        image_locations = ImageLocation.objects.filter(**filters).select_related('image', 'user').order_by('-id')
         # image_locations = ImageLocation.objects.filter(**filters).select_related('image', 'user').order_by('-id')
 
         filtered_queryset = ImageLocationFilter(query_params, queryset=image_locations).qs

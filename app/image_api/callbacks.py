@@ -4,6 +4,7 @@ from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from .models import ImageLocation
+from geopy.geocoders import Nominatim
 
 
 @api_view(['POST'])
@@ -11,6 +12,7 @@ from .models import ImageLocation
 def image_location_callback(request):
     print("Request body:", request.body.decode('utf-8'))
 
+    geolocator = Nominatim(user_agent="my_app")
     try:
         # Получаем JSON из тела запроса
         json_data = json.loads(request.body)
@@ -26,11 +28,10 @@ def image_location_callback(request):
 
     latitude = result.get("Latitude")
     longitude = result.get("Longitude")
-    address = result.get("Address")
 
     try:
         image_location = ImageLocation.objects.get(id=task_id)
-
+        address = image_location.address
         # Обновляем статус в зависимости от ответа
         if status_response == "Succeeded":
             image_location.status = "done"
@@ -39,13 +40,20 @@ def image_location_callback(request):
 
         # Обновляем координаты и адрес, если статус успешный
         if status_response == "Succeeded":
-            if latitude is not None:
+            if latitude is not None and image_location.lat is not None:
                 image_location.lat = latitude
-            if longitude is not None:
+            if longitude is not None and image_location.lon is not None:
                 image_location.lon = longitude
-            if address is not None:
-                image_location.address = address
 
+            if address is not None:
+                try:
+                    loc = geolocator.reverse((latitude, longitude))
+                    if loc:
+                        address = loc.address
+                except Exception as e:
+                    print(f"Ошибка reverse для {latitude}, {longitude}: {e}")
+
+        image_location.address = address
         image_location.save()
 
         return JsonResponse({
