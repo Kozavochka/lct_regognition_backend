@@ -40,12 +40,12 @@ def image_location_callback(request):
 
         # Обновляем координаты и адрес, если статус успешный
         if status_response == "Succeeded":
-            if latitude is not None and image_location.lat is not None:
+            if latitude is not None and image_location.lat is None:
                 image_location.lat = latitude
-            if longitude is not None and image_location.lon is not None:
+            if longitude is not None and image_location.lon is None:
                 image_location.lon = longitude
 
-            if address is not None:
+            if address is None:
                 try:
                     loc = geolocator.reverse((latitude, longitude))
                     if loc:
