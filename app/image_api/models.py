@@ -15,6 +15,14 @@ class UploadedImage(models.Model):
     def __str__(self):
         return f"{self.filename} (загружено {self.user.username})"
 
+    @property
+    def preview_url(self):
+        """
+        Возвращает presigned URL для предпросмотра файла из S3.
+        """
+        s3_service = S3Service()
+        return s3_service.generate_presigned_url(self.filename)
+
 class ImageLocation(models.Model):
     # Ссылка на пользователя
     user = models.ForeignKey(
@@ -78,8 +86,6 @@ class ImageLocation(models.Model):
         else:
             main_coordinates = None
 
-        s3_service = S3Service()
-
         trash_images = []
         for det in self.detected_image_mappings.all():
             trash_images.append({
@@ -88,7 +94,7 @@ class ImageLocation(models.Model):
                     "id": det.file.id,
                     "filename": det.file.filename,
                     "file_path": det.file.s3_url or det.file.file_path,
-                    "preview_url": s3_service.generate_presigned_url(det.file.filename),
+                    "preview_url": det.file.preview_url,
                     # "preview_url": self.preview_url,
                     # preview_url можно тоже добавить, если нужно
                 },
