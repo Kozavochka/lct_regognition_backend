@@ -422,4 +422,4 @@ class DeleteUserImageLocationView(APIView):
 
         # Удаляем объект
         image_location.delete()
-        return Response({"message": f"ImageLocation {pk} deleted"}, status=status.HTTP_200_OK)    
+        return Response({"message": f"ImageLocation {pk} deleted"}, status=status.HTTP_200_OK)

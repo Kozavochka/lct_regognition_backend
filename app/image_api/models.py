@@ -77,6 +77,9 @@ class ImageLocation(models.Model):
             main_coordinates = {"lat": self.lat, "lon": self.lon}
         else:
             main_coordinates = None
+
+        s3_service = S3Service()
+
         trash_images = []
         for det in self.detected_image_mappings.all():
             trash_images.append({
@@ -85,7 +88,8 @@ class ImageLocation(models.Model):
                     "id": det.file.id,
                     "filename": det.file.filename,
                     "file_path": det.file.s3_url or det.file.file_path,
-                    "preview_url": self.preview_url,
+                    "preview_url": s3_service.generate_presigned_url(det.file.filename),
+                    # "preview_url": self.preview_url,
                     # preview_url можно тоже добавить, если нужно
                 },
                 "lat": det.lat,
