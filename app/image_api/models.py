@@ -148,3 +148,23 @@ class DetectedImageLocation(models.Model):
     lat = models.FloatField(null=True, blank=True)
     lon = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    address = models.CharField(max_length=500, null=True, blank=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'file': {
+                'id': self.file.id,
+                'filename': self.file.filename,
+                'original_filename': self.file.original_filename,
+                'file_path': self.file.file_path,
+                's3_url': self.file.s3_url,
+                'preview_url': self.file.preview_url,
+                'uploaded_at': self.file.uploaded_at.isoformat(),
+            },
+            'image_location_id': self.image_location_id,
+            'lat': self.lat,
+            'lon': self.lon,
+            'created_at': self.created_at.isoformat(),
+            'address': self.address,
+        }
