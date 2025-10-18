@@ -121,6 +121,8 @@ class UploadedArchive(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    metadata_filename = models.CharField(max_length=255, null=True, blank=True)
+    metadata_s3_url = models.URLField(null=True, blank=True)
 
 class DetectedImageLocation(models.Model):
     file = models.ForeignKey(

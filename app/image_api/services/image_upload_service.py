@@ -117,7 +117,7 @@ class ImageUploadService:
             }
             for loc in image_locations
         ]
-        process_geo_tasks.delay(images_data)
+        # process_geo_tasks.delay(images_data)
 
         return uploaded_images, None
 
