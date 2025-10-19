@@ -43,6 +43,7 @@ def _send_geo_request_internal(images):
 
     payload = {
         "mainCallback": main_callback_url,
+        "callbackUrl":main_callback_url, # Для обратной совместимости
         "trashCallback": trash_callback_url,
         "tasks": tasks
     }
