@@ -324,14 +324,6 @@ def image_trash_result_callback(request):
     status_response = response_data.get("Status")
     result_array = response_data.get("Result", [])
 
-    if status_response != "Succeeded":
-        error_msg = f"Задача завершилась со статусом {status_response}. Ошибка: {response_data.get('ErrorMessage')}"
-        print(error_msg)
-        image_location.status = "failed"
-        image_location.error_reason = response_data.get('ErrorMessage')
-        image_location.save()
-        return Response({"error": error_msg}, status=status.HTTP_400_BAD_REQUEST)
-
     try:
         image_location = ImageLocation.objects.get(id=task_id)
         user = image_location.user
@@ -339,7 +331,14 @@ def image_trash_result_callback(request):
         error_msg = f"ImageLocation с id {task_id} не найден."
         print(error_msg)
         return Response({"error": error_msg}, status=status.HTTP_404_NOT_FOUND)
-
+    
+    if status_response != "Succeeded":
+        error_msg = f"Задача завершилась со статусом {status_response}. Ошибка: {response_data.get('ErrorMessage')}"
+        print(error_msg)
+        image_location.status = "failed"
+        image_location.error_reason = response_data.get('ErrorMessage')
+        image_location.save()
+        return Response({"error": error_msg}, status=status.HTTP_400_BAD_REQUEST)
     s3 = S3Service()
 
     processed_count = 0
