@@ -155,7 +155,7 @@ class DetectedImageLocation(models.Model):
     def to_dict(self):
         return {
             'id': self.id,
-            'file': {
+            'image': {
                 'id': self.file.id,
                 'filename': self.file.filename,
                 'original_filename': self.file.original_filename,
