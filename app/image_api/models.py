@@ -121,6 +121,7 @@ class ImageLocation(models.Model):
                 },
                 "lat": det.lat,
                 "lon": det.lon,
+                'address': self.address,
             })
 
         return {
