@@ -9,6 +9,7 @@ from image_api.services.s3_service import S3Service
 import zipfile
 import io
 import uuid
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +44,27 @@ def process_archive_task(archive_id):
 
         s3 = S3Service()
 
-        # Скачиваем файл из S3 в память
+        # Скачиваем архив
         obj = s3.s3_client.get_object(Bucket=s3.bucket_name, Key=archive.filename)
         file_bytes = obj["Body"].read()
 
+        # Загружаем JSON, если есть
+        metadata_map = {}
+        if archive.metadata_filename:
+            try:
+                meta_obj = s3.s3_client.get_object(Bucket=s3.bucket_name, Key=archive.metadata_filename)
+                meta_bytes = meta_obj["Body"].read()
+                metadata_list = json.loads(meta_bytes.decode("utf-8"))
+                # превращаем список в словарь по имени файла
+                metadata_map = {item["image"]: item for item in metadata_list}
+            except Exception as e:
+                logger.error(f"Failed to load metadata JSON for archive {archive_id}: {e}")
+
+        validated_files = []
         with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
             image_files = [f for f in zf.namelist() if not f.endswith("/")]
 
-            validated_files = []
             for i, name in enumerate(image_files):
-                # проверка по расширению
                 if not name.lower().endswith((".jpg", ".jpeg", ".png", ".gif")):
                     logger.warning(f"Skipped non-image file: {name}")
                     continue
@@ -60,34 +72,37 @@ def process_archive_task(archive_id):
                 with zf.open(name) as file_data:
                     content = file_data.read()
 
+                # берём метаданные, если есть
+                meta = metadata_map.get(name, {})
                 validated_files.append({
                     "filename": f"{uuid.uuid4()}_{name}",
-                    "content": content,
+                    # "content": content,
                     "original_filename": name,
                     "index": i,
                     "content_type": (
                         "image/jpeg" if name.lower().endswith(("jpg", "jpeg")) else "image/png"
                     ),
-                    # для совместимости с upload_and_process
-                    "address": None,
-                    "lat": None,
-                    "lon": None,
-                    "angle": DEFAULT_ANGLE,   # дефолт
-                    "height": DEFAULT_HEIGHT,  # дефолт
+                    "address": meta.get("address"),
+                    "lat": meta.get("lat"),
+                    "lon": meta.get("lon"),
+                    "angle": meta.get("angle", DEFAULT_ANGLE),
+                    "height": meta.get("height", DEFAULT_HEIGHT),
                 })
 
-            if validated_files:
-                service = ImageUploadService(archive.user)
-                uploaded_images, errors = service.upload_and_process(validated_files)
-                if errors:
-                    logger.error(f"Errors while processing archive {archive_id}: {errors}")
-                else:
-                    try:
-                        s3.delete_file(archive.filename)
-                        archive.delete()
-                        logger.info(f"Archive {archive.filename} deleted from DB and S3")
-                    except Exception as cleanup_error:
-                        logger.error(f"Cleanup error for archive {archive_id}: {cleanup_error}")    
+        if validated_files:
+            service = ImageUploadService(archive.user)
+            uploaded_images, errors = service.upload_and_process(validated_files)
+            if errors:
+                logger.error(f"Errors while processing archive {archive_id}: {errors}")
+            else:
+                try:
+                    s3.delete_file(archive.filename)
+                    if archive.metadata_filename:
+                        s3.delete_file(archive.metadata_filename)
+                    archive.delete()
+                    logger.info(f"Archive {archive.filename} and metadata deleted from DB and S3")
+                except Exception as cleanup_error:
+                    logger.error(f"Cleanup error for archive {archive_id}: {cleanup_error}")
 
     except Exception as e:
         logger.error(f"Error processing archive {archive_id}: {str(e)}")

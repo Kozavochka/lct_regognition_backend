@@ -14,27 +14,37 @@ class ArchiveUploadService:
         self.user = user
         self.s3_service = S3Service()
 
-    def upload_archive(self, file_obj):
-        """
-        Загружает архив в S3 и создаёт запись в БД
-        """
-        filename = f"archives/{uuid.uuid4()}_{file_obj.name}"
-        file_content = file_obj.read()
+    def upload_archive(self, archive_file, metadata_file=None):
+        # Загружаем архив
+        archive_filename = f"archives/{uuid.uuid4()}_{archive_file.name}"
+        archive_content = archive_file.read()
 
-        success = self.s3_service.upload_file(filename, file_content, content_type="application/zip")
+        success = self.s3_service.upload_file(archive_filename, archive_content, content_type="application/zip")
         if not success:
             raise Exception("Failed to upload archive to S3")
 
-        s3_url = self.s3_service.generate_file_url(filename)
+        archive_s3_url = self.s3_service.generate_file_url(archive_filename)
+
+        metadata_filename = None
+        metadata_s3_url = None
+
+        if metadata_file:
+            metadata_filename = f"archives/{uuid.uuid4()}_{metadata_file.name}"
+            metadata_content = metadata_file.read()
+            success = self.s3_service.upload_file(metadata_filename, metadata_content, content_type="application/json")
+            if not success:
+                raise Exception("Failed to upload metadata JSON to S3")
+            metadata_s3_url = self.s3_service.generate_file_url(metadata_filename)
 
         archive = UploadedArchive.objects.create(
-            filename=filename,
-            original_filename=file_obj.name,
-            s3_url=s3_url,
-            user=self.user
+            filename=archive_filename,
+            original_filename=archive_file.name,
+            s3_url=archive_s3_url,
+            user=self.user,
+            metadata_filename=metadata_filename,
+            metadata_s3_url=metadata_s3_url
         )
 
-        # ставим задачу в очередь
+        # Задачу в очередь
         process_archive_task.delay(archive.id)
-
         return archive

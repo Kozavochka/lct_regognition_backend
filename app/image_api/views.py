@@ -253,13 +253,15 @@ class UploadArchiveView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
-        file_obj = request.FILES.get("archive")
-        if not file_obj:
+        archive_file = request.FILES.get("archive")
+        metadata_file = request.FILES.get("json")  # необязательное поле
+
+        if not archive_file:
             return Response({"error": "No archive uploaded"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             service = ArchiveUploadService(request.user)
-            archive = service.upload_archive(file_obj)
+            archive = service.upload_archive(archive_file, metadata_file)
             return Response({"message": "Archive uploaded", "archive_id": archive.id}, status=status.HTTP_202_ACCEPTED)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
