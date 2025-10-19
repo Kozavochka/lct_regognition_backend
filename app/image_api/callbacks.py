@@ -327,6 +327,9 @@ def image_trash_result_callback(request):
     if status_response != "Succeeded":
         error_msg = f"Задача завершилась со статусом {status_response}. Ошибка: {response_data.get('ErrorMessage')}"
         print(error_msg)
+        image_location.status = "failed"
+        image_location.error_reason = response_data.get('ErrorMessage')
+        image_location.save()
         return Response({"error": error_msg}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
@@ -381,5 +384,7 @@ def image_trash_result_callback(request):
         processed_count += 1
         print(f"Создан DetectedImageLocation для TaskId {task_id}")
 
+    image_location.status = "done"
+    image_location.save()
     return Response({"message": f"Успешно обработано {processed_count} элементов.", "task_id": task_id},
                     status=status.HTTP_200_OK)
