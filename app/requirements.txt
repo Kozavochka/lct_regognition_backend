@@ -35,4 +35,3 @@ drf-spectacular==0.28.0
 django_filter==25.2
 pandas==2.3.3
 geopy
-drf-yasg==1.21.11
