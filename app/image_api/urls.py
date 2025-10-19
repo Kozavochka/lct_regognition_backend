@@ -2,7 +2,7 @@ from django.urls import path
 
 from .callbacks import image_location_callback, image_trash_result_callback
 from .views import UploadImageView, GetUserImageLocationsView, DeleteUserImageLocationView, UploadArchiveView, \
-    GetUserDetectedLocation
+    GetUserDetectedLocation, RetryUserImageLocationView
 
 urlpatterns = [
     path('upload-archive/', UploadArchiveView.as_view(), name='upload_archive'),
@@ -12,6 +12,5 @@ urlpatterns = [
     path('update-image-trash-result/', image_trash_result_callback, name='image-trash-location-callback'),
     path('map/trash-images-by-coordinates/', GetUserDetectedLocation.as_view(), name='user-trash-image-locations'),
     path("image-locations/<int:pk>/", DeleteUserImageLocationView.as_view(), name="delete-image-location"),
+    path("image-locations/<int:pk>/retry", RetryUserImageLocationView.as_view(), name="retry-image-location"),
 ]
-
-# POST /api/upload-image/

@@ -689,3 +689,73 @@ class GetUserDetectedLocation(APIView):
 
         # оборачиваем под ключ "data"
         return Response({"data": response_data}, status=status.HTTP_200_OK)
+    
+
+@extend_schema(
+    request=None,  # POST-запрос не требует тела, только pk в URL
+    responses={
+        200: OpenApiResponse(
+            description="Задача на повторную обработку успешно отправлена",
+            response={
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "example": "ImageLocation 42 retried"}
+                }
+            }
+        ),
+        401: OpenApiResponse(
+            description="Требуется аутентификация",
+            response={"type": "object", "properties": {"error": {"type": "string"}}}
+        ),
+        404: OpenApiResponse(
+            description="ImageLocation не найден у текущего пользователя",
+            response={"type": "object", "properties": {"error": {"type": "string"}}}
+        ),
+    },
+    examples=[
+        OpenApiExample(
+            name="Успешный ответ",
+            value={"message": "ImageLocation 42 retried"},
+            response_only=True,
+            status_codes=["200"]
+        ),
+        OpenApiExample(
+            name="Ошибка 401",
+            value={"error": "Authentication required"},
+            response_only=True,
+            status_codes=["401"]
+        ),
+        OpenApiExample(
+            name="Ошибка 404",
+            value={"error": "ImageLocation not found"},
+            response_only=True,
+            status_codes=["404"]
+        ),
+    ],
+    summary="Повторная обработка ImageLocation",
+    description=(
+        "Позволяет пользователю повторно отправить на обработку конкретный объект `ImageLocation`. "
+        "Перед повторной отправкой все связанные `DetectedImageLocation` удаляются, "
+        "а статус `ImageLocation` переводится в `processing` (ожидает). "
+        "После этого задача снова ставится в очередь Celery."
+    ),
+)
+class RetryUserImageLocationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, *args, **kwargs):
+        user = request.user
+
+        try:
+            # Ищем объект только у текущего пользователя
+            image_location = ImageLocation.objects.get(id=pk, user=user)
+        except ImageLocation.DoesNotExist:
+            return Response(
+                {"error": "ImageLocation not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        service = ImageUploadService(request.user)
+        service.retry_result(image_location)
+
+        return Response({"message": f"ImageLocation {pk} retried"}, status=status.HTTP_200_OK)

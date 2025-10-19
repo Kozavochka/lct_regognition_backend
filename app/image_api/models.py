@@ -2,7 +2,9 @@ from django.contrib.auth.models import User
 from django.conf import settings
 from django.db import models
 from .services.s3_service import S3Service
-
+import logging
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 
 class UploadedImage(models.Model):
     filename = models.CharField(max_length=255, help_text="Уникальное имя файла")
@@ -23,6 +25,17 @@ class UploadedImage(models.Model):
         s3_service = S3Service()
         return s3_service.generate_presigned_url(self.filename)
 
+
+@receiver(post_delete, sender=UploadedImage)
+def delete_file_from_s3(sender, instance, **kwargs):
+    if instance.filename:
+        s3 = S3Service()
+        try:
+            s3.delete_file(instance.filename)
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Ошибка при удалении {instance.filename} из S3: {e}")
+        
 class ImageLocation(models.Model):
     # Ссылка на пользователя
     user = models.ForeignKey(

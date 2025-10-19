@@ -121,6 +121,38 @@ class ImageUploadService:
 
         return uploaded_images, None
 
+    @transaction.atomic
+    def retry_result(self, image_location):
+        from image_api.tasks import process_geo_tasks
+
+        # Удаление всех связанных DetectedImageLocation
+        for det in image_location.detected_image_mappings.all():
+            if det.file:
+                s3 = S3Service()
+                s3.delete_file(det.file.filename)
+                det.file.delete()
+        image_location.detected_image_mappings.all().delete()
+
+    
+
+        # Перевод в статус "ожидает"
+        image_location.status = "processing"
+        image_location.error_reason = None  # если хочешь сбросить ошибку
+        image_location.save(update_fields=["status", "error_reason"])
+
+        # данные для задачи
+        images_data = [{
+            "task_id": image_location.id,
+            "image_filename": image_location.image.filename,
+            "angle": image_location.angle,
+            "height": image_location.height,
+            "lat": image_location.lat,
+            "lon": image_location.lon,
+        }]
+
+        # Отправляем в Celery
+        process_geo_tasks.delay(images_data)
+
 
     def _rollback(self, uploaded_images):
         for uploaded_image in uploaded_images:
