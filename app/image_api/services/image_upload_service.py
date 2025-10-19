@@ -137,7 +137,7 @@ class ImageUploadService:
 
         # Перевод в статус "ожидает"
         image_location.status = "processing"
-        image_location.error_reason = None  # если хочешь сбросить ошибку
+        image_location.error_reason = None
         image_location.save(update_fields=["status", "error_reason"])
 
         # данные для задачи
