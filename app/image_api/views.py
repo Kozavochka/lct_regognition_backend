@@ -9,8 +9,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from geopy.geocoders import Nominatim
 
-from .filters import ImageLocationFilter
-from .models import ImageLocation
+from .filters import ImageLocationDateFilter, RadiusFilter
+from .models import ImageLocation, DetectedImageLocation
 from .pagination import CustomPagination
 from image_api.services.image_upload_service import ImageUploadService
 from image_api.services.archive_upload_service import ArchiveUploadService
@@ -21,31 +21,16 @@ logger = logging.getLogger(__name__)
 DEFAULT_ANGLE=0
 DEFAULT_HEIGHT=1.5
 
-upload_request_schema = {
-    "type": "object",
-    "properties": {
-        "image": {
-            "type": "array",
-            "items": {
-                "type": "string",
-                "format": "binary"
-            },
-            "description": "Массив файлов изображений"
-        }
-    },
-    "required": ["image"],
-    "additionalProperties": False
-}
-
-# Схема успешного ответа (пустой объект)
-success_response_schema = {
+# --- UploadImageView ---
+# Схема успешного ответа
+upload_success_response_schema = {
     "type": "object",
     "properties": {},
     "additionalProperties": False
 }
 
 # Схема ошибки валидации
-validation_error_schema = {
+upload_validation_error_schema = {
     "type": "object",
     "properties": {
         "validation_errors": {
@@ -65,7 +50,7 @@ validation_error_schema = {
 }
 
 # Схема серверной ошибки
-server_error_schema = {
+upload_server_error_schema = {
     "type": "object",
     "properties": {
         "error": {"type": "string"},
@@ -79,56 +64,54 @@ server_error_schema = {
         'multipart/form-data': {
             'type': 'object',
             'properties': {
-                'image': {
+                'images_data[][image]': {
                     'type': 'array',
                     'items': {
                         'type': 'string',
                         'format': 'binary'
                     },
-                    'description': 'Массив файлов изображений',
-                    'example': ['file1.jpg', 'file2.png']
-                }
+                    'description': 'Файл изображения (множественные параметры)',
+                },
+                'images_data[][address]': {
+                    'type': 'string',
+                    'description': 'Адрес местоположения изображения (необязательно, если есть lat/lon)',
+                },
+                'images_data[][lat]': {
+                    'type': 'number',
+                    'format': 'float',
+                    'description': 'Широта (необязательно, если есть address)',
+                },
+                'images_data[][lon]': {
+                    'type': 'number',
+                    'format': 'float',
+                    'description': 'Долгота (необязательно, если есть address)',
+                },
+                'images_data[][angle]': {
+                    'type': 'number',
+                    'format': 'float',
+                    'description': f'Угол камеры (по умолчанию {DEFAULT_ANGLE})',
+                },
+                'images_data[][height]': {
+                    'type': 'number',
+                    'format': 'float',
+                    'description': f'Высота камеры (по умолчанию {DEFAULT_HEIGHT})',
+                },
             },
-            'required': ['image'],
-            'additionalProperties': False
+            # 'required': ['images_data[][image]'], # Это не работает так в multipart/form-data
         }
     },
     responses={
         200: OpenApiResponse(
-            description="Успешная загрузка. Нет тела ответа.",
-            response=None  # Пустой ответ
+            description="Изображения успешно загружены и обработаны",
+            response=upload_success_response_schema
         ),
         400: OpenApiResponse(
             description="Ошибка валидации файлов",
-            response={
-                "type": "object",
-                "properties": {
-                    "validation_errors": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "file_index": {"type": "integer"},
-                                "filename": {"type": "string"},
-                                "error": {"type": "string"}
-                            },
-                            "required": ["file_index", "filename", "error"]
-                        }
-                    }
-                },
-                "required": ["validation_errors"]
-            }
+            response=upload_validation_error_schema
         ),
         500: OpenApiResponse(
-            description="Серверная ошибка",
-            response={
-                "type": "object",
-                "properties": {
-                    "error": {"type": "string"},
-                    "details": {"type": "string"}
-                },
-                "required": ["error", "details"]
-            }
+            description="Ошибка загрузки или внутренняя ошибка сервера",
+            response=upload_server_error_schema
         )
     },
     examples=[
@@ -162,12 +145,11 @@ server_error_schema = {
             status_codes=["500"]
         )
     ],
-    summary="Загрузка изображений",
-    description=(
-        "Загружает одно или несколько изображений. "
-        "Файлы сохраняются в S3, создаётся запись в БД и запускается задача на определение геолокации. "
-        "В случае ошибки — возвращается список ошибок или общая ошибка сервера."
-    )
+    summary="Загрузка изображений и создание задач на обработку",
+    description="Принимает массив изображений и связанных с ними данных (адрес, координаты, угол, высота). "
+                "Если предоставлен только адрес, производится геокодирование для получения координат. "
+                "Если предоставлены только координаты, производится обратное геокодирование для получения адреса. "
+                "Затем изображения валидируются, загружаются в S3, и создаются задачи для асинхронной обработки.",
 )
 class UploadImageView(APIView):
     permission_classes = [IsAuthenticated]
@@ -238,6 +220,7 @@ class UploadImageView(APIView):
             return Response({"error": "Upload failed", "details": errors}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response({}, status=status.HTTP_200_OK)
+
     def _rollback_uploaded_files(self, uploaded_images, s3_service):
         """
         Откатывает уже загруженные файлы при ошибке
@@ -248,7 +231,91 @@ class UploadImageView(APIView):
                 s3_service.delete_file(uploaded_image.filename)
             except Exception as delete_error:
                 logger.error(f"Error deleting {uploaded_image.filename}: {str(delete_error)}")
-    
+
+
+# --- UploadArchiveView ---
+# Схема успешного ответа
+upload_archive_success_response_schema = {
+    "type": "object",
+    "properties": {
+        "message": {"type": "string"},
+        "archive_id": {"type": "integer"}
+    },
+    "required": ["message", "archive_id"]
+}
+
+# Схема ошибки 400
+upload_archive_error_400_schema = {
+    "type": "object",
+    "properties": {
+        "error": {"type": "string"}
+    },
+    "required": ["error"]
+}
+
+# Схема ошибки 500
+upload_archive_error_500_schema = {
+    "type": "object",
+    "properties": {
+        "error": {"type": "string"}
+    },
+    "required": ["error"]
+}
+
+@extend_schema(
+    request={
+        'multipart/form-data': {
+            'type': 'object',
+            'properties': {
+                'archive': {
+                    'type': 'string',
+                    'format': 'binary',
+                    'description': 'ZIP-архив с изображениями',
+                },
+            },
+            'required': ['archive'],
+        }
+    },
+    responses={
+        202: OpenApiResponse(
+            description="Архив успешно загружен, задача на обработку поставлена в очередь",
+            response=upload_archive_success_response_schema
+        ),
+        400: OpenApiResponse(
+            description="Архив не предоставлен",
+            response=upload_archive_error_400_schema
+        ),
+        500: OpenApiResponse(
+            description="Ошибка загрузки или внутренняя ошибка сервера",
+            response=upload_archive_error_500_schema
+        )
+    },
+    examples=[
+        OpenApiExample(
+            name="Успешный запрос",
+            value={"message": "Archive uploaded", "archive_id": 123},
+            response_only=True,
+            status_codes=["202"]
+        ),
+        OpenApiExample(
+            name="Ошибка 400",
+            value={"error": "No archive uploaded"},
+            response_only=True,
+            status_codes=["400"]
+        ),
+        OpenApiExample(
+            name="Ошибка 500",
+            value={"error": "Failed to process archive"},
+            response_only=True,
+            status_codes=["500"]
+        )
+    ],
+    summary="Загрузка архива с изображениями",
+    description="Принимает ZIP-архив, содержащий изображения. "
+                "Архив загружается в S3, и создается асинхронная задача для его обработки. "
+                "Обработка может включать извлечение изображений, их валидацию и последующую "
+                "загрузку в систему с созданием соответствующих задач.",
+)
 class UploadArchiveView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -266,87 +333,135 @@ class UploadArchiveView(APIView):
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-@extend_schema(
-    summary="Получить локации изображений пользователя",
-    description=(
-        "Возвращает список геолокаций изображений текущего пользователя. "
-        "**Доступ только для суперпользователей или пользователей из группы 'Admins'.**"
-    ),
-    # security=[{"BearerAuth": []}],  # Показывает, что нужна авторизация
-    responses={
-        200: {
+
+# --- GetUserImageLocationsView ---
+# Схема ответа для одного элемента results
+image_location_item_schema = {
+    "type": "object",
+    "properties": {
+        'id': {"type": "integer", "example": 1},
+        'status': {"type": "string", "example": 'done'},
+        'created_at': {"type": "string", "format": "date-time", "example": '2023-10-20T10:00:00Z'},
+        'user': {
             "type": "object",
             "properties": {
-                "count": {"type": "integer"},
-                "next": {"type": "string", "nullable": True},
-                "previous": {"type": "string", "nullable": True},
-                "results": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/components/schemas/ImageLocation"
-                    }
-                }
-            },
-            "required": ["count", "results"]
+                'id': {"type": "integer", "example": 1},
+                'username': {"type": "string", "example": 'john_doe'},
+            }
         },
-        401: OpenApiResponse(description="Неавторизованный доступ"),
-        403: OpenApiResponse(
-            description="Доступ запрещён. Только суперпользователи или админы.",
-            response={
+        'main_address': {"type": "string", "example": 'ул. Пушкина, д. 10, г. Москва'},
+        'main_coordinates': {
+            "type": "object",
+            "properties": {
+                'lat': {"type": "number", "format": "float", "example": 55.7558},
+                'lon': {"type": "number", "format": "float", "example": 37.6173}
+            },
+            "nullable": True
+        },
+        'main_image': {
+            "type": "object",
+            "properties": {
+                'id': {"type": "integer", "example": 1},
+                'filename': {"type": "string", "example": 'image.jpg'},
+                'file_path': {"type": "string", "example": '/path/to/image.jpg'},
+                'preview_url': {"type": "string", "format": "uri", "example": 'http://example.com/preview.jpg'},
+            }
+        },
+        'trash_images': {
+            "type": "array",
+            "items": {
                 "type": "object",
                 "properties": {
-                    "error": {"type": "string"}
-                },
-                "example": {"error": "Only superusers or admins are allowed"}
+                    'id': {"type": "integer", "example": 1},
+                    'image': {
+                        "type": "object",
+                        "properties": {
+                            'id': {"type": "integer", "example": 2},
+                            'filename': {"type": "string", "example": 'trash.jpg'},
+                            # ... другие поля изображения ...
+                        }
+                    },
+                    'lat': {"type": "number", "format": "float", "example": 55.7568},
+                    'lon': {"type": "number", "format": "float", "example": 37.6183},
+                }
             }
+        }
+    }
+}
+
+# Схема ответа с пагинацией
+get_user_locations_response_schema = {
+    "type": "object",
+    "properties": {
+        'count': {"type": "integer", "example": 100},
+        'next': {"type": "string", "format": "uri", "nullable": True, "example": 'http://api.example.org/accounts/?page=2'},
+        'previous': {"type": "string", "format": "uri", "nullable": True, "example": 'http://api.example.org/accounts/?page=1'},
+        'results': {
+            "type": "array",
+            "items": image_location_item_schema
+        }
+    }
+}
+
+# Схема ошибки 401
+auth_error_schema = {
+    "type": "object",
+    "properties": {
+        "error": {"type": "string"}
+    },
+    "required": ["error"]
+}
+
+@extend_schema(
+    request=None, # GET-запрос не имеет тела
+    responses={
+        200: OpenApiResponse(
+            description="Список локаций успешно получен",
+            response=get_user_locations_response_schema
+        ),
+        401: OpenApiResponse(
+            description="Требуется аутентификация",
+            response=auth_error_schema
         )
     },
+    parameters=[
+        # Query parameters
+        # openapi.Parameter не используется напрямую, но можно описать через параметры
+        # или через фильтры, если они интегрированы
+        # Здесь описываем параметры вручную
+    ],
     examples=[
         OpenApiExample(
             name="Успешный ответ",
             value={
-                "count": 2,
-                "next": "http://localhost:8000/api/user-image-locations/?page=2",
+                "count": 1,
+                "next": None,
                 "previous": None,
                 "results": [
-                    {
-                        "id": 1,
-                        "status": "done",
-                        "lat": 55.7558,
-                        "lon": 37.6176,
-                        "created_at": "2024-01-01T12:00:00Z",
-                        "user": {"id": 1, "username": "admin"},
-                        "image": {
-                            "id": 1,
-                            "filename": "uuid_123.jpg",
-                            "file_path": "https://s3.example.com/uploads/uuid_123.jpg"
-                        }
-                    }
+                    image_location_item_schema["properties"] # example value
                 ]
             },
             response_only=True,
             status_codes=["200"]
         ),
         OpenApiExample(
-            name="Ошибка доступа",
-            value={"error": "Only superusers or admins are allowed"},
+            name="Ошибка 401",
+            value={"error": "Authentication required"},
             response_only=True,
-            status_codes=["403"]
+            status_codes=["401"]
         )
-    ]
+    ],
+    summary="Получить список локаций изображений пользователя",
+    description="Возвращает список локаций изображений, принадлежащих аутентифицированному пользователю. "
+                "Поддерживает фильтрацию по дате создания и по радиусу от заданной точки, "
+                "а также пагинацию результатов.",
+    # Документация для query параметров не включена в extend_schema напрямую
+    # Она будет автоматически сгенерирована из фильтров, если они настроены
 )
 class GetUserImageLocationsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        # Проверяем, является ли пользователь суперпользователем или админом
-        # if not (request.user.is_superuser or request.user.groups.filter(name='Admins').exists()):
-        #     return Response(
-        #         {"error": "Only superusers or admins are allowed"},
-        #         status=status.HTTP_403_FORBIDDEN
-        #     )
-
-        # Получаем текущего пользователя
         user = request.user
 
         if not user.is_authenticated:
@@ -355,51 +470,21 @@ class GetUserImageLocationsView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # === Фильтрация ===
-        filters = {'user': user}  # всегда фильтруем по пользователю
+        # Базовый QuerySet, ограниченный пользователем
+        base_queryset = ImageLocation.objects.filter(user=user).select_related('image', 'user').order_by('-id')
 
-        query_params = request.query_params.copy()
+        # Инициализируем оба фильтра с одинаковым QuerySet
+        # 1. Фильтр по дате
+        date_filter_instance = ImageLocationDateFilter(request.query_params, queryset=base_queryset)
+        # 2. Фильтр по радиусу
+        radius_filter_instance = RadiusFilter(request.query_params, queryset=date_filter_instance.qs)
 
-        # Фильтрация по дате (только дата, без времени)
-        created_date_after = query_params.get('created_date_after')
-        created_date_before = query_params.get('created_date_before')
-
-        if created_date_after:
-            parsed_date = parse_date(created_date_after)
-            if not parsed_date:
-                return Response(
-                    {"error": "Invalid date format for 'created_date_after'. Expected YYYY-MM-DD."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            # Фильтр: created_at >= начало дня
-            filters['created_at__date__gte'] = parsed_date
-
-        if created_date_before:
-            parsed_date = parse_date(created_date_before)
-            if not parsed_date:
-                return Response(
-                    {"error": "Invalid date format for 'created_date_before'. Expected YYYY-MM-DD."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            # Фильтр: created_at <= конец дня
-            filters['created_at__date__lte'] = parsed_date
-
-
-        if 'radius_km' not in query_params:
-            query_params['radius_km'] = 10
-
-        # Применяем фильтрацию
-        image_locations = ImageLocation.objects.filter(**filters).select_related('image', 'user').order_by('-id')
-        # image_locations = ImageLocation.objects.filter(**filters).select_related('image', 'user').order_by('-id')
-
-        filtered_queryset = ImageLocationFilter(query_params, queryset=image_locations).qs
-
-        # Фильтруем ImageLocation по пользователю
-        # image_locations = ImageLocation.objects.order_by('-id').filter(user=user).select_related('image', 'user')
+        # Применяем оба фильтра последовательно
+        final_queryset = radius_filter_instance.qs
 
         # Пагинация
         paginator = CustomPagination()
-        paginated_locations = paginator.paginate_queryset(filtered_queryset, request)
+        paginated_locations = paginator.paginate_queryset(final_queryset, request)
 
         # Формируем список словарей через to_dict()
         response_data = [loc.to_dict() for loc in paginated_locations]
@@ -407,6 +492,57 @@ class GetUserImageLocationsView(APIView):
         # Возвращаем ответ с пагинацией
         return paginator.get_paginated_response(response_data)
 
+
+# --- DeleteUserImageLocationView ---
+# Схема успешного ответа
+delete_success_response_schema = {
+    "type": "object",
+    "properties": {
+        "message": {"type": "string"}
+    },
+    "required": ["message"]
+}
+
+# Схема ошибки 404
+delete_error_404_schema = {
+    "type": "object",
+    "properties": {
+        "error": {"type": "string"}
+    },
+    "required": ["error"]
+}
+
+@extend_schema(
+    request=None, # DELETE-запрос не имеет тела
+    responses={
+        200: OpenApiResponse(
+            description="Локация успешно удалена",
+            response=delete_success_response_schema
+        ),
+        404: OpenApiResponse(
+            description="Локация не найдена или не принадлежит пользователю",
+            response=delete_error_404_schema
+        )
+    },
+    examples=[
+        OpenApiExample(
+            name="Успешный запрос",
+            value={"message": "ImageLocation 123 deleted"},
+            response_only=True,
+            status_codes=["200"]
+        ),
+        OpenApiExample(
+            name="Ошибка 404",
+            value={"error": "ImageLocation not found"},
+            response_only=True,
+            status_codes=["404"]
+        )
+    ],
+    summary="Удалить конкретную локацию изображения пользователя",
+    description="Удаляет локацию изображения, принадлежащую аутентифицированному пользователю, "
+                "по её уникальному идентификатору. "
+                "Удаление каскадно затрагивает связанные объекты (например, DetectedImageLocation).",
+)
 class DeleteUserImageLocationView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -424,4 +560,116 @@ class DeleteUserImageLocationView(APIView):
 
         # Удаляем объект
         image_location.delete()
-        return Response({"message": f"ImageLocation {pk} deleted"}, status=status.HTTP_200_OK)    
+        return Response({"message": f"ImageLocation {pk} deleted"}, status=status.HTTP_200_OK)
+
+
+# --- GetUserDetectedLocation ---
+# Схема ответа для одного элемента results
+detected_location_item_schema = {
+    "type": "object",
+    "properties": {
+        'id': {"type": "integer", "example": 1},
+        'file': {
+            "type": "object",
+            "properties": {
+                'id': {"type": "integer", "example": 1},
+                'filename': {"type": "string", "example": 'trash_image.jpg'},
+                'original_filename': {"type": "string", "example": 'original_trash.jpg'},
+                'file_path': {"type": "string", "example": '/path/to/trash_image.jpg'},
+                's3_url': {"type": "string", "format": "uri", "example": 'http://s3.example.com/trash_image.jpg'},
+                'preview_url': {"type": "string", "format": "uri", "example": 'http://example.com/preview.jpg'},
+                'uploaded_at': {"type": "string", "format": "date-time", "example": '2023-10-20T10:00:00Z'},
+            }
+        },
+        'image_location_id': {"type": "integer", "example": 123},
+        'lat': {"type": "number", "format": "float", "example": 55.7568},
+        'lon': {"type": "number", "format": "float", "example": 37.6183},
+        'created_at': {"type": "string", "format": "date-time", "example": '2023-10-20T11:00:00Z'},
+        'address': {"type": "string", "example": 'ул. Ленина, д. 15, г. Москва'},
+    }
+}
+
+# Схема ответа с пагинацией
+get_user_detected_locations_response_schema = {
+    "type": "object",
+    "properties": {
+        'count': {"type": "integer", "example": 50},
+        'next': {"type": "string", "format": "uri", "nullable": True, "example": 'http://api.example.org/accounts/?page=2'},
+        'previous': {"type": "string", "format": "uri", "nullable": True, "example": 'http://api.example.org/accounts/?page=1'},
+        'results': {
+            "type": "array",
+            "items": detected_location_item_schema
+        }
+    }
+}
+
+@extend_schema(
+    request=None, # GET-запрос не имеет тела
+    responses={
+        200: OpenApiResponse(
+            description="Список обнаруженных локаций успешно получен",
+            response=get_user_detected_locations_response_schema
+        ),
+        401: OpenApiResponse(
+            description="Требуется аутентификация",
+            response=auth_error_schema
+        )
+    },
+    examples=[
+        OpenApiExample(
+            name="Успешный ответ",
+            value={
+                "count": 1,
+                "next": None,
+                "previous": None,
+                "results": [
+                    detected_location_item_schema # example value
+                ]
+            },
+            response_only=True,
+            status_codes=["200"]
+        ),
+        OpenApiExample(
+            name="Ошибка 401",
+            value={"error": "Authentication required"},
+            response_only=True,
+            status_codes=["401"]
+        )
+    ],
+    summary="Получить список обнаруженных локаций мусора пользователя",
+    description="Возвращает список обнаруженных локаций мусора (DetectedImageLocation), "
+                "связанных с изображениями, загруженными аутентифицированным пользователем. "
+                "Поддерживает фильтрацию по радиусу от заданной точки и пагинацию результатов.",
+    # Документация для query параметров не включена в extend_schema напрямую
+    # Она будет автоматически сгенерирована из фильтров, если они настроены
+)
+class GetUserDetectedLocation(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        user = request.user
+
+        if not user.is_authenticated:
+            return Response(
+                {"error": "Authentication required"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        # Базовый QuerySet, ограниченный пользователем через связанную модель UploadedImage
+        base_queryset = DetectedImageLocation.objects.filter(
+            file__user=user  # Предполагается, что DetectedImageLocation.file -> UploadedImage.user
+        ).select_related('file', 'image_location', 'file__user').order_by('-id')
+
+        # Используем фильтр по радиусу
+        radius_filter_instance = RadiusFilter(request.query_params, queryset=base_queryset)
+        final_queryset = radius_filter_instance.qs
+
+        # Пагинация
+        paginator = CustomPagination()
+        paginated_locations = paginator.paginate_queryset(final_queryset, request)
+
+        # Формируем список словарей через to_dict()
+        response_data = [loc.to_dict() for loc in paginated_locations]
+
+        # Возвращаем ответ с пагинацией
+        return paginator.get_paginated_response(response_data)

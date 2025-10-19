@@ -76,7 +76,7 @@ def process_archive_task(archive_id):
                 meta = metadata_map.get(name, {})
                 validated_files.append({
                     "filename": f"{uuid.uuid4()}_{name}",
-                    # "content": content,
+                    "content": content,
                     "original_filename": name,
                     "index": i,
                     "content_type": (

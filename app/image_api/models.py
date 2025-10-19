@@ -15,6 +15,14 @@ class UploadedImage(models.Model):
     def __str__(self):
         return f"{self.filename} (загружено {self.user.username})"
 
+    @property
+    def preview_url(self):
+        """
+        Возвращает presigned URL для предпросмотра файла из S3.
+        """
+        s3_service = S3Service()
+        return s3_service.generate_presigned_url(self.filename)
+
 class ImageLocation(models.Model):
     # Ссылка на пользователя
     user = models.ForeignKey(
@@ -71,12 +79,21 @@ class ImageLocation(models.Model):
         s3 = S3Service()
         return s3.generate_presigned_url(self.image.filename)
 
-
+    @property
+    def status_display_ru(self):
+        mapping = {
+            'processing': 'Ожидает',
+            'done': 'Готово',
+            'failed': 'Ошибка',
+        }
+        return mapping.get(self.status, self.status)
+    
     def to_dict(self):
         if self.lat is not None and self.lon is not None:
             main_coordinates = {"lat": self.lat, "lon": self.lon}
         else:
             main_coordinates = None
+
         trash_images = []
         for det in self.detected_image_mappings.all():
             trash_images.append({
@@ -85,7 +102,8 @@ class ImageLocation(models.Model):
                     "id": det.file.id,
                     "filename": det.file.filename,
                     "file_path": det.file.s3_url or det.file.file_path,
-                    "preview_url": self.preview_url,
+                    "preview_url": det.file.preview_url,
+                    # "preview_url": self.preview_url,
                     # preview_url можно тоже добавить, если нужно
                 },
                 "lat": det.lat,
@@ -94,7 +112,7 @@ class ImageLocation(models.Model):
 
         return {
             "id": self.id,
-            "status": self.status,
+            "status": self.status_display_ru,
             "created_at": self.created_at.isoformat(),
             "user": {
                 "id": self.user.id,
@@ -140,3 +158,23 @@ class DetectedImageLocation(models.Model):
     lat = models.FloatField(null=True, blank=True)
     lon = models.FloatField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    address = models.CharField(max_length=500, null=True, blank=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'image': {
+                'id': self.file.id,
+                'filename': self.file.filename,
+                'original_filename': self.file.original_filename,
+                'file_path': self.file.file_path,
+                's3_url': self.file.s3_url,
+                'preview_url': self.file.preview_url,
+                'uploaded_at': self.file.uploaded_at.isoformat(),
+            },
+            'image_location_id': self.image_location_id,
+            'lat': self.lat,
+            'lon': self.lon,
+            'created_at': self.created_at.isoformat(),
+            'address': self.address,
+        }
