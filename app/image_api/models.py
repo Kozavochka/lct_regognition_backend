@@ -79,7 +79,15 @@ class ImageLocation(models.Model):
         s3 = S3Service()
         return s3.generate_presigned_url(self.image.filename)
 
-
+    @property
+    def status_display_ru(self):
+        mapping = {
+            'processing': 'Ожидает',
+            'done': 'Готово',
+            'failed': 'Ошибка',
+        }
+        return mapping.get(self.status, self.status)
+    
     def to_dict(self):
         if self.lat is not None and self.lon is not None:
             main_coordinates = {"lat": self.lat, "lon": self.lon}
@@ -104,7 +112,7 @@ class ImageLocation(models.Model):
 
         return {
             "id": self.id,
-            "status": self.status,
+            "status": self.status_display_ru,
             "created_at": self.created_at.isoformat(),
             "user": {
                 "id": self.user.id,
