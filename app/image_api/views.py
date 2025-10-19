@@ -655,21 +655,14 @@ class GetUserDetectedLocation(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Базовый QuerySet, ограниченный пользователем через связанную модель UploadedImage
         base_queryset = DetectedImageLocation.objects.filter(
-            file__user=user  # Предполагается, что DetectedImageLocation.file -> UploadedImage.user
+            file__user=user
         ).select_related('file', 'image_location', 'file__user').order_by('-id')
 
-        # Используем фильтр по радиусу
         radius_filter_instance = RadiusFilter(request.query_params, queryset=base_queryset)
         final_queryset = radius_filter_instance.qs
 
-        # Пагинация
-        paginator = CustomPagination()
-        paginated_locations = paginator.paginate_queryset(final_queryset, request)
+        response_data = [loc.to_dict() for loc in final_queryset]
 
-        # Формируем список словарей через to_dict()
-        response_data = [loc.to_dict() for loc in paginated_locations]
-
-        # Возвращаем ответ с пагинацией
-        return paginator.get_paginated_response(response_data)
+        # оборачиваем под ключ "data"
+        return Response({"data": response_data}, status=status.HTTP_200_OK)
